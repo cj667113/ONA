@@ -1,4 +1,4 @@
-#SETUP#
+# SETUP
 Log into OCI and Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL
 ![alt text](images/CA-PAGE-1.png "Page 1")
 ![alt text](images/CA-PAGE-2.png "Page 2")
@@ -12,10 +12,10 @@ Get the Domain URL
 
 git clone https://github.com/cj667113/ONA.git
 
-#DOCKER BUILD#
+# DOCKER BUILD
 docker build --no-cache -t ona .
 
-#DOCKER#
+# DOCKER
 To run ONA as a docker container run:
   ADDRESS=IP of the NODE
   ORACLE_CLIENT_ID= ID FROM OCI CONFIDENTIAL APP
