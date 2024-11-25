@@ -1,5 +1,5 @@
 # SETUP
-Log into OCI and Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL
+Log into OCI and Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL and enable the Confidential Application
 ![alt text](images/CA-PAGE-1.png "Page 1")
 ![alt text](images/CA-PAGE-2.png "Page 2")
 ![alt text](images/CA-PAGE-3.png "Page 3")
