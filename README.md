@@ -8,8 +8,7 @@ Log into OCI and Create a Confidential Application and retrieve the CLIENT ID, S
 Get the Domain URL
 ![alt text](images/IDCS-URL.png "Domain URL")
 
-#INSTALL#
-
+# INSTALL
 git clone https://github.com/cj667113/ONA.git
 
 # DOCKER BUILD
@@ -23,6 +22,5 @@ To run ONA as a docker container run:
   ORACLE_IDCS_URL=Domain URL
   docker run --network host --privileged -d --restart always -e ORACLE_CLIENT_ID="$ORACLE_CLIENT_ID" -e ORACLE_IDCS_SECRET="$ORACLE_IDCS_SECRET" -e ORACLE_IDCS_URL="$ORACLE_IDCS_URL" -e ADDRESS="http://$ADDRESS:5000" ona
 
-#Log in#
-
+# Log in
 In a web browser go to http://$ADDRESS:5000
