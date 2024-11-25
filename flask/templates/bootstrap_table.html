@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% with messages = get_flashed_messages() %}
+{% if messages %}
+{% for message in messages %}
+{{ message }}
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-lg-15 text-center">
+      <table id="dnat-table" class="table">
+        <thead>
+          <tr>
+            <th class="text-center">Rule Number</th>
+            <th class="text-center">Protocol</th>
+            <th class="text-center">Destination Port</th>
+            <th class="text-center">Forward IP</th>
+            <th class="text-center">Forward Port</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for nat_rule in dnat_rules.keys() if dnat_rules[nat_rule]['chain']=='PREROUTING' and
+          dnat_rules[nat_rule]['target']=='DNAT' %}
+          <tr>
+            <td>
+              <div>{{ nat_rule }}</div>
+            </td>
+            <td>
+              <select id="temp-dropdown-dnat" name="dropdown" value={{dnat_rules[nat_rule]['protocol']}} class="select">
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+            </td>
+            <td>
+              <div contenteditable>{{ dnat_rules[nat_rule]['destination_port'] }}</div>
+            </td>
+            <td>
+              <div contenteditable>{{ dnat_rules[nat_rule]['forward_ip'] }}</div>
+            </td>
+            <td>
+              <div contenteditable>{{ dnat_rules[nat_rule]['forward_port'] }}</div>
+            </td>
+            <td>
+              <div><button onclick="deleteRule(this)" class="btn btn-outline-danger btn-sm">X</button></div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-lg-15 text-center">
+      <table id="snat-table" class="table d-none">
+        <thead>
+          <tr>
+            <th class="text-center">Rule Number</th>
+            <th class="text-center">Protocol</th>
+            <th class="text-center">SNAT</th>
+            <th class="text-center">Source IP</th>
+            <th class="text-center">Interface</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for nat_rule in snat_rules.keys() if snat_rules[nat_rule]['chain']=='POSTROUTING' %}
+          <tr>
+            <td>
+              <div>{{ nat_rule }}</div>
+            </td>
+            <td>
+              <select id="temp-dropdown-snat" name="dropdown" value={{snat_rules[nat_rule]['protocol']}} class="select">
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+            </td>
+            <td>
+              <select id="temp-dropdown-snat2" name="dropdown" value={{snat_rules[nat_rule]['target']}} class="select">
+                <option value="MASQUERADE">MASQUERADE</option>
+                <option value="SNAT">SNAT</option>
+              </select>
+            </td>
+            <td>
+              <div contenteditable>{{ snat_rules[nat_rule]['source_ip'] }}</div>
+            </td>
+            <td>
+              <div contenteditable>{{ snat_rules[nat_rule]['output_interface'] }}</div>
+            </td>
+            <td>
+              <div><button onclick="deleteRule(this)" class="btn btn-outline-danger btn-sm">X</button></div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
