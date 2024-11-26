@@ -1,15 +1,28 @@
 # SETUP
-Log into OCI and Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL and enable the Confidential Application
+Log into OCI and create a Compute Instance and gather the public IP address.
+
+Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL and enable the Confidential Application.
+
 ![alt text](images/CA-PAGE-1.png "Page 1")
+
+Use the Public IP Address of the Compute Node in the redirect URL.
+
+There is a bug in the OCI Console that will prevent you from creating the Confidential Application with "Allow non-HTTPS URLs". You may need to leave that box unchecked and readd it after creation of the Confidential Application.
+
 ![alt text](images/CA-PAGE-2.png "Page 2")
+
 ![alt text](images/CA-PAGE-3.png "Page 3")
+
 ![alt text](images/CA-PAGE-4.png "Page 4")
 
 Get the Domain URL
 ![alt text](images/IDCS-URL.png "Domain URL")
 
-# INSTALL
+# Clone the Git Repo
     git clone https://github.com/cj667113/ONA.git
+
+# Install Docker
+https://docs.docker.com/engine/install/
 
 # DOCKER BUILD
     docker build --no-cache -t ona .
