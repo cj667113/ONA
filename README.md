@@ -15,10 +15,10 @@ There is a bug in the OCI Console that will prevent you from creating the Confid
 
 ![alt text](images/CA-PAGE-4.png "Page 4")
 
+Make sure to enable the Confidential Application in the OCI Console.
+
 Get the Domain URL
 ![alt text](images/IDCS-URL.png "Domain URL")
-
-Make sure to enable the Confidential Application in the OCI Console.
 
 # Clone the Git Repo
     git clone https://github.com/cj667113/ONA.git
