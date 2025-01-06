@@ -1,4 +1,4 @@
-# SETUP
+# Setup
 Log into OCI and create a Compute Instance and gather the public IP address.
 
 Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL and enable the Confidential Application.
@@ -26,10 +26,10 @@ Get the Domain URL
 # Install Docker
 https://docs.docker.com/engine/install/
 
-# DOCKER BUILD
+# Docker Build
     docker build --no-cache -t ona .
 
-# DOCKER
+# Run Docker Container
 To run ONA as a docker container run:
 
     ADDRESS=IP of the NODE
@@ -39,7 +39,7 @@ To run ONA as a docker container run:
 
     docker run --network host --privileged -d --restart always -e ORACLE_CLIENT_ID="$ORACLE_CLIENT_ID" -e ORACLE_IDCS_SECRET="$ORACLE_IDCS_SECRET" -e ORACLE_IDCS_URL="$ORACLE_IDCS_URL" -e ADDRESS="http://$ADDRESS:5000" ona
 
-# Log in
+# Access the UI
 In a web browser go to http://$ADDRESS:5000
 
 After you Log into the appliance you should be redirected back to a page like this:
