@@ -7,7 +7,7 @@ Create a Confidential Application and retrieve the CLIENT ID, SECRET AND URL and
 
 Use the Public IP Address of the Compute Node in the redirect URL.
 
-There is a bug in the OCI Console that will prevent you from creating the Confidential Application with "Allow non-HTTPS URLs". You may need to leave that box unchecked and readd it after creation of the Confidential Application.
+There is a bug in the OCI Console that will prevent you from creating the Confidential Application with "Allow non-HTTPS URLs". You may need to leave that box unchecked and re-add it after creation of the Confidential Application.
 
 ![alt text](images/CA-PAGE-2.png "Page 2")
 
@@ -41,3 +41,7 @@ To run ONA as a docker container run:
 
 # Log in
 In a web browser go to http://$ADDRESS:5000
+
+After you Log into the appliance you should be redirected back to a page like this:
+
+![alt text](images/ONA-Landing.png "Page Landing")
