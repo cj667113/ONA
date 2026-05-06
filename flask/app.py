@@ -1146,7 +1146,14 @@ def vnic_scan_state():
     if not isinstance(scan, dict):
         scan = {}
     if not scan.get("vnics"):
-        scan = {"scanned_at": "", "vnics": [], "source_ips": [], "interfaces": []}
+        scan = {
+            "scanned_at": "",
+            "vnics": [],
+            "source_ips": [],
+            "interfaces": list(local_interfaces().values()),
+        }
+    elif not scan.get("interfaces"):
+        scan["interfaces"] = list(local_interfaces().values())
     return scan
 
 

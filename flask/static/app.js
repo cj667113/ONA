@@ -9,6 +9,7 @@ let tempDropDown = document.getElementById("temp-dropdown");
 let tempDropDownSNATProtocol = document.getElementById("temp-dropdown-snat-protocol");
 let tempDropDownSNAT = document.getElementById("temp-dropdown-2");
 let dashboardPollTimer = null;
+let snatInterfaceOptions = [];
 
 console.log("V1.6.1 Loaded");
 
@@ -152,7 +153,7 @@ function add_row_snat() {
   cell1.appendChild(cloned_dropdown_snat);
   cell2.appendChild(cloned_dropdown_snat2);
   cell3.innerHTML = "<div contenteditable>Null</div>";
-  cell4.innerHTML = "<div contenteditable>-</div>";
+  cell4.appendChild(snatInterfaceControl(""));
   cell5.appendChild(cloned_delete_snat);
   organizeRules();
 }
@@ -239,7 +240,7 @@ function tableToJson() {
     var tableRow = table_snat.rows[e];
     var rowData = [];
     for (var f = 0; f < tableRow.cells.length; f++) {
-      if (f === 1 || f === 2) {
+      if (f === 1 || f === 2 || f === 4) {
         try {
           setData = tableRow.cells[f].querySelector(".select").value;
           rowData.push(setData);
@@ -356,6 +357,37 @@ function selectControl(options, selectedValue, extraClass) {
   return select;
 }
 
+function snatInterfaceControl(selectedValue) {
+  var selected = (selectedValue || "").trim();
+  var options = snatInterfaceOptions.slice();
+  var selectedKnown = options.some(function (option) {
+    return option.value === selected;
+  });
+
+  if (selected && !selectedKnown) {
+    options.unshift({ value: selected, label: selected + " (current)" });
+  }
+  if (!options.length) {
+    options.push({ value: selected, label: selected || "No interfaces loaded" });
+  }
+
+  var select = selectControl(options, selected, "select dropper snat-interface-select");
+  if (!selected && snatInterfaceOptions.length) {
+    select.value = snatInterfaceOptions[0].value;
+    select.setAttribute("value", select.value);
+  }
+  if (!snatInterfaceOptions.length && !selected) {
+    select.disabled = true;
+  }
+  return select;
+}
+
+function snatInterfaceCell(selectedValue) {
+  var cell = document.createElement("td");
+  cell.appendChild(snatInterfaceControl(selectedValue));
+  return cell;
+}
+
 function editableCell(value) {
   var cell = document.createElement("td");
   var div = document.createElement("div");
@@ -439,7 +471,7 @@ function renderNatTables(dnatRules, snatRules) {
     snatRow.appendChild(targetCell);
 
     snatRow.appendChild(editableCell(snatRule.source_ip));
-    snatRow.appendChild(editableCell(snatRule.output_interface));
+    snatRow.appendChild(snatInterfaceCell(snatRule.output_interface));
     snatRow.appendChild(deleteCell());
     snatBody.appendChild(snatRow);
   }
@@ -458,6 +490,41 @@ function sortedObjectKeys(obj) {
 
 function vnicElement(id) {
   return document.getElementById(id);
+}
+
+function setSnatInterfaceOptions(interfaces) {
+  var seen = new Set();
+  snatInterfaceOptions = [];
+  for (let item of interfaces || []) {
+    if (!item || !item.name || seen.has(item.name)) {
+      continue;
+    }
+    seen.add(item.name);
+    snatInterfaceOptions.push({
+      value: item.name,
+      label: item.name + (item.addresses && item.addresses.length ? " (" + item.addresses.join(", ") + ")" : ""),
+    });
+  }
+  refreshSnatInterfaceCells();
+}
+
+function refreshSnatInterfaceCells() {
+  if (!snatTable) {
+    return;
+  }
+  var body = snatTable.getElementsByTagName("tbody")[0];
+  if (!body) {
+    return;
+  }
+
+  for (let row of body.rows) {
+    if (!row.cells[4]) {
+      continue;
+    }
+    var existingSelect = row.cells[4].querySelector("select");
+    var selected = existingSelect ? existingSelect.value : row.cells[4].textContent.trim();
+    row.replaceChild(snatInterfaceCell(selected), row.cells[4]);
+  }
 }
 
 function setVnicStatus(message, isError) {
@@ -490,6 +557,8 @@ function renderVnicState(data) {
   var interfaces = scan.interfaces || [];
   var interfaceSelect = vnicElement("snat-pool-interface");
   var vnicList = vnicElement("vnic-list");
+
+  setSnatInterfaceOptions(interfaces);
 
   if (!vnicList || !interfaceSelect) {
     return;
