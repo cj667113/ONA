@@ -9,10 +9,6 @@ let dashboardView = document.getElementById("dashboard-view");
 let dnatView = document.getElementById("dnat-view");
 let snatView = document.getElementById("snat-view");
 let backupsView = document.getElementById("backups-view");
-let tempDeleteButton = document.getElementById("temp-delete-btn");
-let tempDropDown = document.getElementById("temp-dropdown");
-let tempDropDownSNATProtocol = document.getElementById("temp-dropdown-snat-protocol");
-let tempDropDownSNAT = document.getElementById("temp-dropdown-2");
 let dashboardPollTimer = null;
 let dashboardHistory = [];
 let dashboardRangeSeconds = 3600;
@@ -20,8 +16,6 @@ let dashboardChartResizeTimer = null;
 let dashboardChartResizeListenerAttached = false;
 let snatInterfaceOptions = [];
 let submitToastTimer = null;
-
-console.log("V1.6.1 Loaded");
 
 function showSubmitSuccess(message) {
   var toast = document.getElementById("submit-toast");
@@ -36,43 +30,19 @@ function showSubmitSuccess(message) {
   }, 3000);
 }
 
-function updateDropDowns() {
-  //console.log("Updating Dropdowns");
-  var dropdowns = document.getElementsByClassName('select');
-  for (var obj of dropdowns) {
-    if (obj.className === 'select') {
-      var options = obj.children;
-      //console.log("Object Dropdown" + obj);
-      for (let child of options) {
-        if (obj.getAttribute('value') === child.getAttribute('value')) {
-          child.setAttribute("selected", "");
-        }
-      }
-    }
-  }
-}
-
-//Drop-down menu modifier
-$(document).ready(function () {
-  console.log(" - Document Ready - ");
-
-  //Default the correct drop-down selection for protocol
-  updateDropDowns();
+function initializeApp() {
   loadVnicState();
   loadBackupState();
   setupDashboardCharts();
   loadDashboardHistory();
   startDashboardStream();
+}
 
-  //Update select element value when selection changes
-  $(document).on('change', '.dropper', function () {
-    //console.log("Dropdown changing.");
-    //alert($(this).val());
-    $(this).attr("value", $(this).val());
-    //console.log($(this).val());
-  });
-
-})
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeApp);
+} else {
+  initializeApp();
+}
 
 function changeMenu(menu) {
   var sections = {
@@ -83,7 +53,7 @@ function changeMenu(menu) {
   };
 
   if (!sections[menu]) {
-    console.log("Something went wrong!");
+    console.warn("Unknown menu: " + menu);
     return;
   }
 
@@ -111,89 +81,61 @@ function changeMenu(menu) {
 
 
 function add_row_dnat() {
-  //console.log("add dnat row");
   var table = dnatTable.getElementsByTagName('tbody')[0];
-
-  var cloned_delete_dnat = tempDeleteButton.cloneNode(true);
-  cloned_delete_dnat.id = "";
-  cloned_delete_dnat.className = "";
-
-  var cloned_dropdown_dnat = tempDropDown.cloneNode(true);
-  cloned_dropdown_dnat.id = "dropdown-dnat";
-  cloned_dropdown_dnat.className = "select dropper";
-
-  try {
-    var loc = table.rows.length;
-    //console.log(loc);
-  } catch (error) {
-    var loc = 0;
-  }
-  var table_id = loc - 1;
+  var table_id = table.rows.length;
   var row = table.insertRow();
   row.id = "dnat_row_" + table_id;
-  var cell0 = row.insertCell(0);
-  var cell1 = row.insertCell(1);
-  var cell2 = row.insertCell(2);
-  var cell3 = row.insertCell(3);
-  var cell4 = row.insertCell(4);
-  var cell5 = row.insertCell(5);
-  cell0.innerHTML = "<div>" + table_id + "</div>";
-  cell1.appendChild(cloned_dropdown_dnat);
-  cell2.innerHTML = "<div contenteditable>-</div>";
-  cell3.innerHTML = "<div contenteditable>-</div>";
-  cell4.innerHTML = "<div contenteditable>-</div>";
-  cell5.appendChild(cloned_delete_dnat);
+  row.appendChild(textCell(table_id));
+
+  var protocolCell = document.createElement("td");
+  protocolCell.appendChild(selectControl([
+    { value: "tcp", label: "TCP" },
+    { value: "udp", label: "UDP" },
+  ], "tcp", "select dropper"));
+  row.appendChild(protocolCell);
+
+  row.appendChild(editableCell("-"));
+  row.appendChild(editableCell("-"));
+  row.appendChild(editableCell("-"));
+  row.appendChild(deleteCell());
   organizeRules();
 }
 
 function add_row_snat() {
-  //console.log("add snat row");
   var table = snatTable.getElementsByTagName('tbody')[0];
-  var cloned_delete_snat = tempDeleteButton.cloneNode(true);
-  cloned_delete_snat.id = "";
-  cloned_delete_snat.className = "";
-
-  var cloned_dropdown_snat = tempDropDownSNATProtocol.cloneNode(true);
-  cloned_dropdown_snat.id = "dropdown-snat";
-  cloned_dropdown_snat.className = "select dropper";
-
-  var cloned_dropdown_snat2 = tempDropDownSNAT.cloneNode(true);
-  cloned_dropdown_snat2.id = "dropdown-snat2";
-  cloned_dropdown_snat2.className = "select dropper";
-
-  try {
-    var loc = table.rows.length;
-  } catch (error) {
-    var loc = 0;
-  }
-  var table_id = loc - 1;
+  var table_id = table.rows.length;
   var row = table.insertRow();
   row.id = "snat_row_" + table_id;
-  var cell0 = row.insertCell(0);
-  var cell1 = row.insertCell(1);
-  var cell2 = row.insertCell(2);
-  var cell3 = row.insertCell(3);
-  var cell4 = row.insertCell(4);
-  var cell5 = row.insertCell(5);
-  cell0.innerHTML = "<div>" + table_id + "</div>";
-  cell1.appendChild(cloned_dropdown_snat);
-  cell2.appendChild(cloned_dropdown_snat2);
-  cell3.innerHTML = "<div contenteditable>Null</div>";
-  cell4.appendChild(snatInterfaceControl(""));
-  cell5.appendChild(cloned_delete_snat);
+  row.appendChild(textCell(table_id));
+
+  var protocolCell = document.createElement("td");
+  protocolCell.appendChild(selectControl([
+    { value: "all", label: "ALL" },
+    { value: "tcp", label: "TCP" },
+    { value: "udp", label: "UDP" },
+  ], "all", "select dropper"));
+  row.appendChild(protocolCell);
+
+  var targetCell = document.createElement("td");
+  targetCell.appendChild(selectControl([
+    { value: "MASQUERADE", label: "MASQUERADE" },
+    { value: "SNAT", label: "SNAT" },
+  ], "MASQUERADE", "select dropper"));
+  row.appendChild(targetCell);
+
+  row.appendChild(editableCell("Null"));
+  row.appendChild(snatInterfaceCell(""));
+  row.appendChild(deleteCell());
   organizeRules();
 }
 
 function addRule() {
   if (ruleType === "dnat") {
-    //console.log("Calling add_row_dnat");
     add_row_dnat();
   }
   else if (ruleType === "snat") {
-    //console.log("Calling add_row_snat");
     add_row_snat();
   }
-  else { console.log("Something bad happened.") };
 }
 
 function organizeRules() {
@@ -204,19 +146,14 @@ function organizeRules() {
   else if (ruleType === "snat") {
     selected_Table = snatTable.getElementsByTagName('tbody')[0];
   }
-  else {
-    console.log("Couldn't Identify Table for Organizing.");
+  if (!selected_Table) {
+    return;
   }
 
-  try {
-    for (let row = 0; row < selected_Table.rows.length; row++) {
-      var tableRow = selected_Table.rows[row];
-      tableRow.id = ruleType + "_row_" + row;
-      tableRow.cells[0].innerHTML = "<div>" + row + "</div>";
-    }
-  }
-  catch (error) {
-    console.log(error);
+  for (let row = 0; row < selected_Table.rows.length; row++) {
+    var tableRow = selected_Table.rows[row];
+    tableRow.id = ruleType + "_row_" + row;
+    tableRow.cells[0].textContent = row;
   }
 
 }
@@ -275,10 +212,7 @@ function tableToJson() {
           console.error(error);
         }
       }
-      //console.log("Untrimmed - " + tableRow.cells[f] + " TextContent - " + tableRow.cells[f].textContent);
-      //console.log("Element Name: " + tableRow.cells[f].querySelector(".select").nodeName);
       setData = tableRow.cells[f].textContent.trim();
-      //console.log("Set Data: " + setData);
       rowData.push(setData);
     }
     data_snat.push(rowData);
@@ -333,7 +267,6 @@ function sendJson() {
   xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
   xhr.setRequestHeader("X-CSRFToken", csrfToken);
   var j = tableToJson();
-  console.log(j);
   xhr.send(JSON.stringify(j));
 }
 
@@ -371,7 +304,6 @@ function selectControl(options, selectedValue, extraClass) {
   var select = document.createElement("select");
   select.name = "dropdown";
   select.className = extraClass || "select dropper";
-  select.setAttribute("value", selectedValue);
   for (let optionData of options) {
     var option = document.createElement("option");
     option.value = optionData.value;
@@ -406,7 +338,6 @@ function snatInterfaceControl(selectedValue) {
   var select = selectControl(options, selected, "select dropper snat-interface-select");
   if (!selected && snatInterfaceOptions.length) {
     select.value = snatInterfaceOptions[0].value;
-    select.setAttribute("value", select.value);
   }
   if (!snatInterfaceOptions.length && !selected) {
     select.disabled = true;
@@ -562,45 +493,6 @@ function setSnatInterfaceOptions(scan) {
   refreshSnatInterfaceCells();
 }
 
-function populateInterfaceSelect(select, options, selectedValue, placeholderText) {
-  var selected = normalizeInterfaceValue(selectedValue);
-  var hasSelected = options.some(function (option) {
-    return option.value === selected;
-  });
-
-  select.replaceChildren();
-  if (!selected && options.length) {
-    selected = options[0].value;
-    hasSelected = true;
-  }
-
-  if (selected && !hasSelected) {
-    var currentOption = document.createElement("option");
-    currentOption.value = selected;
-    currentOption.textContent = selected + " (current)";
-    currentOption.selected = true;
-    select.appendChild(currentOption);
-  } else {
-    var placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = options.length ? placeholderText : "No interfaces loaded";
-    placeholder.selected = !selected;
-    select.appendChild(placeholder);
-  }
-
-  for (let optionData of options) {
-    var option = document.createElement("option");
-    option.value = optionData.value;
-    option.textContent = optionData.label;
-    if (optionData.value === selected) {
-      option.selected = true;
-    }
-    select.appendChild(option);
-  }
-
-  select.disabled = !options.length && !selected;
-}
-
 function refreshSnatInterfaceCells() {
   if (!snatTable) {
     return;
@@ -646,38 +538,23 @@ function copyText(value, button) {
     return;
   }
 
-  function markCopied() {
+  function markButton(message) {
     var original = button.textContent;
-    button.textContent = "Copied";
+    button.textContent = message;
     window.setTimeout(function () {
       button.textContent = original;
     }, 1200);
   }
 
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(markCopied).catch(function () {
-      fallbackCopyText(text, markCopied);
+    navigator.clipboard.writeText(text).then(function () {
+      markButton("Copied");
+    }).catch(function () {
+      window.prompt("Copy OCID", text);
     });
     return;
   }
-  fallbackCopyText(text, markCopied);
-}
-
-function fallbackCopyText(text, onCopied) {
-  var textArea = document.createElement("textarea");
-  textArea.value = text;
-  textArea.setAttribute("readonly", "");
-  textArea.style.position = "fixed";
-  textArea.style.left = "-9999px";
-  document.body.appendChild(textArea);
-  textArea.select();
-  try {
-    document.execCommand("copy");
-    onCopied();
-  } catch (error) {
-    console.error(error);
-  }
-  textArea.remove();
+  window.prompt("Copy OCID", text);
 }
 
 function vnicIdCell(value) {
@@ -828,11 +705,12 @@ function loadVnicState() {
     });
 }
 
-function rescanVnics() {
+function scanVnicSources() {
   setVnicStatus("Scanning attached VNICs...", false);
   requestJson("/api/vnics/rescan", "POST", {})
     .then(function (data) {
       renderVnicState(data);
+      setVnicStatus("VNICs scanned.", false);
       showSubmitSuccess();
     })
     .catch(function (error) {
@@ -995,7 +873,7 @@ function renderBackupList(backups) {
     var emptyCell = document.createElement("td");
     emptyCell.colSpan = 4;
     emptyCell.className = "text-muted";
-    emptyCell.textContent = "No backups found for this bucket and prefix.";
+    emptyCell.textContent = "No .zip backups found in this bucket.";
     emptyRow.appendChild(emptyCell);
     backupList.appendChild(emptyRow);
     return;
@@ -1031,14 +909,16 @@ function renderBackupList(backups) {
     });
     actions.appendChild(restoreButton);
 
-    var deleteButton = document.createElement("button");
-    deleteButton.type = "button";
-    deleteButton.className = "btn btn-outline-danger btn-sm";
-    deleteButton.textContent = "Delete";
-    deleteButton.addEventListener("click", function () {
-      deleteBackup(backup.name);
-    });
-    actions.appendChild(deleteButton);
+    if (backup.in_configured_prefix) {
+      var deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "btn btn-outline-danger btn-sm";
+      deleteButton.textContent = "Delete";
+      deleteButton.addEventListener("click", function () {
+        deleteBackup(backup.name);
+      });
+      actions.appendChild(deleteButton);
+    }
 
     actionCell.appendChild(actions);
     row.appendChild(actionCell);
@@ -1152,10 +1032,11 @@ function runBackupNow() {
       return requestJson("/api/backups/run", "POST", {});
     })
     .then(function (data) {
+      var backupName = data && data.backup && data.backup.object_name ? data.backup.object_name : "";
       return loadBackupState({
         preservePolicy: true,
         loadingMessage: "Refreshing backups...",
-        successMessage: "Backup created: " + data.backup.object_name,
+        successMessage: backupName ? "Backup created: " + backupName : "Backup created.",
       });
     })
     .then(function () {
@@ -1357,7 +1238,8 @@ var dashboardChartDefinitions = [
 
 function sampleEpoch(sample) {
   if (sample && sample.epoch !== undefined) {
-    return Number(sample.epoch);
+    var epoch = Number(sample.epoch);
+    return Number.isFinite(epoch) ? epoch : null;
   }
   var timestamp = sample ? Date.parse(sample.timestamp) : NaN;
   return Number.isNaN(timestamp) ? null : timestamp / 1000;

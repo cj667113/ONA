@@ -1,0 +1,191 @@
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+
+os.environ["ONA_DISABLE_BACKUP_SCHEDULER"] = "1"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "flask"))
+
+import app as ona_app  # noqa: E402
+
+
+class SnatPoolTests(unittest.TestCase):
+    def test_disabled_payload_does_not_require_vnic_scan(self):
+        with mock.patch.object(
+            ona_app,
+            "snat_pool_policy",
+            return_value={"enabled": True, "source_ips": ["10.0.0.1"], "interface": "eth1"},
+        ), mock.patch.object(ona_app, "vnic_scan_state", side_effect=AssertionError):
+            pool = ona_app.validate_snat_pool_payload(
+                {"enabled": False, "source_ips": ["10.0.0.1"]}
+            )
+
+        self.assertFalse(pool["enabled"])
+        self.assertEqual(pool["source_ips"], ["10.0.0.1"])
+        self.assertEqual(pool["interface"], "eth1")
+        self.assertEqual(pool["sources"], [])
+
+    def test_enabled_payload_requires_virtual_router_ip(self):
+        scan = {
+            "source_ips": [
+                {
+                    "ip": "10.0.0.10",
+                    "interface": "eth1",
+                    "configured": True,
+                    "virtual_router_ip": "",
+                }
+            ]
+        }
+
+        with mock.patch.object(ona_app, "vnic_scan_state", return_value=scan):
+            with self.assertRaisesRegex(ona_app.RuleValidationError, "virtual router IP"):
+                ona_app.validate_snat_pool_payload(
+                    {"enabled": True, "source_ips": ["10.0.0.10"]}
+                )
+
+    def test_temp_chain_cleanup_runs_when_mangle_chain_creation_fails(self):
+        calls = []
+
+        def fake_run_iptables(args, check=True):
+            calls.append(args)
+            if args == ["-t", "mangle", "-N", f"{ona_app.SNAT_MARK_CHAIN}_CHECK"]:
+                raise RuntimeError("mangle unavailable")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        pool = {
+            "enabled": True,
+            "source_ips": ["10.0.0.10"],
+            "sources": ona_app.decorate_snat_pool_sources(
+                [
+                    {
+                        "ip": "10.0.0.10",
+                        "interface": "eth1",
+                        "virtual_router_ip": "10.0.0.1",
+                    }
+                ]
+            ),
+        }
+
+        with mock.patch.object(ona_app, "run_iptables", side_effect=fake_run_iptables):
+            with self.assertRaisesRegex(RuntimeError, "mangle unavailable"):
+                ona_app.validate_snat_pool_runtime_commands(pool)
+
+        self.assertIn(["-t", "nat", "-X", f"{ona_app.SNAT_POOL_CHAIN}_CHECK"], calls)
+        self.assertIn(["-t", "mangle", "-X", f"{ona_app.SNAT_MARK_CHAIN}_CHECK"], calls)
+
+    def test_positioned_jump_is_reinserted_at_requested_position(self):
+        calls = []
+
+        def fake_run_iptables(args, check=True):
+            calls.append(args)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(ona_app, "remove_jump") as remove_jump, mock.patch.object(
+            ona_app, "run_iptables", side_effect=fake_run_iptables
+        ):
+            ona_app.ensure_jump("PREROUTING", ona_app.SNAT_MARK_CHAIN, "mangle", position=1)
+
+        remove_jump.assert_called_once_with("PREROUTING", ona_app.SNAT_MARK_CHAIN, "mangle")
+        self.assertEqual(
+            calls,
+            [["-t", "mangle", "-I", "PREROUTING", "1", "-j", ona_app.SNAT_MARK_CHAIN]],
+        )
+
+
+class BackupObjectTests(unittest.TestCase):
+    def test_backup_object_allowed_can_require_prefix(self):
+        policy = {"prefix": "ona-backups/"}
+
+        self.assertTrue(ona_app.backup_object_allowed("other/backup.zip", policy))
+        self.assertFalse(
+            ona_app.backup_object_allowed("other/backup.zip", policy, require_prefix=True)
+        )
+        self.assertTrue(
+            ona_app.backup_object_allowed(
+                "ona-backups/backup.zip", policy, require_prefix=True
+            )
+        )
+        self.assertFalse(ona_app.backup_object_allowed("ona-backups/backup.txt", policy))
+        self.assertFalse(ona_app.backup_object_allowed("bad.zip\x00", policy))
+
+    def test_delete_backup_requires_configured_prefix(self):
+        with mock.patch.object(
+            ona_app,
+            "backup_policy",
+            return_value={"bucket": "bucket-a", "prefix": "ona-backups/"},
+        ), self.assertRaisesRegex(ona_app.RuleValidationError, "configured backup prefix"):
+            ona_app.delete_backup_object("other/backup.zip")
+
+    def test_backup_sort_uses_timestamp_before_name(self):
+        backups = [
+            {"name": "z.zip", "time_created": "2026-01-01T00:00:00+00:00"},
+            {"name": "a.zip", "time_created": "2026-02-01T00:00:00+00:00"},
+        ]
+
+        backups.sort(key=ona_app.backup_sort_key, reverse=True)
+
+        self.assertEqual([backup["name"] for backup in backups], ["a.zip", "z.zip"])
+
+
+class ConfigTests(unittest.TestCase):
+    def test_write_file_config_supports_relative_file_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir, mock.patch.dict(os.environ, {}, clear=False):
+            previous_cwd = os.getcwd()
+            os.chdir(tmp_dir)
+            try:
+                with mock.patch.object(ona_app, "config_file_path", return_value="config.json"):
+                    ona_app.write_file_config({"ADDRESS": "http://example.test"})
+                with open("config.json", "r", encoding="utf-8") as config_file:
+                    data = json.load(config_file)
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(data["ADDRESS"], "http://example.test")
+        self.assertTrue(data["ONA_SECRET_KEY"])
+
+    def test_empty_backup_override_clears_saved_value(self):
+        with mock.patch.object(
+            ona_app,
+            "get_config",
+            return_value={"OCI_NAMESPACE": "saved-namespace"},
+        ):
+            policy = ona_app.backup_policy({"OCI_NAMESPACE": ""})
+
+        self.assertEqual(policy["namespace"], "")
+
+    def test_load_file_config_ignores_non_object_json(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.json"
+            config_path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(
+                ona_app, "config_file_path", return_value=str(config_path)
+            ), mock.patch.object(ona_app.app.logger, "warning") as warning:
+                data = ona_app.load_file_config()
+
+        self.assertEqual(data, {})
+        warning.assert_called_once()
+
+
+class ValidationTests(unittest.TestCase):
+    def test_string_false_values_are_false(self):
+        backup_updates = ona_app.validate_backup_policy_payload(
+            {"enabled": "false", "schedule": "daily", "bucket": ""}
+        )
+        snat_pool = ona_app.validate_snat_pool_payload(
+            {"enabled": "false", "source_ips": ["10.0.0.1"]}
+        )
+
+        self.assertEqual(backup_updates["ONA_BACKUP_ENABLED"], "false")
+        self.assertFalse(snat_pool["enabled"])
+
+    def test_numeric_zero_retention_is_preserved(self):
+        self.assertEqual(ona_app.parse_backup_retention(0), "0")
+
+
+if __name__ == "__main__":
+    unittest.main()

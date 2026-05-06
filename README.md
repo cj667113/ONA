@@ -73,12 +73,12 @@ ONA uses OCI instance principal authentication for backups. Put the compute inst
     Allow dynamic-group ONA_DYNAMIC_GROUP to inspect buckets in compartment ONA_COMPARTMENT
     Allow dynamic-group ONA_DYNAMIC_GROUP to manage objects in compartment ONA_COMPARTMENT
 
-In the UI, enter the region, compartment OCID, optional namespace, refresh buckets, select a bucket, set retention, and save the backup policy. Scheduled backups can be enabled or disabled from the panel and run inside the Flask process once per minute, so deploy one ONA app process for a single backup schedule owner.
+In the UI, enter the region, compartment OCID, optional namespace, refresh buckets, select a bucket, set retention, and save the backup policy. The backup list shows `.zip` objects in the selected bucket so a fresh ONA deployment can restore from existing backups. Scheduled backups can be enabled or disabled from the panel and run inside the Flask process once per minute, so deploy one ONA app process for a single backup schedule owner.
 
 The gateway dashboard streams updates in place about every 30 seconds with CPU, memory, conntrack, NAT port, connection, packet, and network throughput statistics.
 
 ## Step 8: Optional Secondary VNIC SNAT Pool
-ONA can scan the instance metadata service for attached VNICs and their primary or secondary private IPs. After attaching secondary VNICs or adding secondary private IPs in OCI, use `Scan & Configure` in the Source NAT tab. ONA scans IMDS, configures missing live OS addresses with `oci-network-config configure` when available or `ip addr add` as a fallback, and refreshes the source address list. Select the addresses to use, enable the SNAT pool, and click `Apply SNAT Pool`.
+ONA can scan the instance metadata service for attached VNICs and their primary or secondary private IPs. After attaching secondary VNICs or adding secondary private IPs in OCI, use `Scan` to inspect available addresses or `Scan & Configure` in the Source NAT tab to configure missing live OS addresses with `oci-network-config configure` when available or `ip addr add` as a fallback. Select the addresses to use, enable the SNAT pool, and click `Apply SNAT Pool`. SNAT pools are applied in separate managed chains with connection marks and policy routes so connections using a source IP assigned to a secondary VNIC leave through that VNIC's OS interface.
 
 For NAT forwarding, disable source/destination check on every VNIC used by the appliance. Oracle recommends `oci-network-config` for Oracle Linux secondary VNIC OS configuration; ONA falls back to live `ip` commands when that utility is not present.
 

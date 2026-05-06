@@ -5,7 +5,7 @@ set -euo pipefail
 echo "1" > /proc/sys/net/ipv4/ip_forward || true
 
 # Load required kernel modules
-for module in ip_tables iptable_nat nf_nat nf_conntrack nf_conntrack_ftp; do
+for module in ip_tables iptable_nat iptable_mangle nf_nat nf_conntrack xt_addrtype xt_connmark xt_mark xt_statistic; do
   modprobe "$module" || true
 done
 

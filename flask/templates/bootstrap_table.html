@@ -134,9 +134,9 @@
               <div>{{ nat_rule }}</div>
             </td>
             <td>
-              <select id="temp-dropdown-dnat" name="dropdown" value="{{ dnat_rules[nat_rule]['protocol'] }}" class="select">
-                <option value="tcp">TCP</option>
-                <option value="udp">UDP</option>
+              <select name="dropdown" class="select">
+                <option value="tcp"{% if dnat_rules[nat_rule]['protocol'] == 'tcp' %} selected{% endif %}>TCP</option>
+                <option value="udp"{% if dnat_rules[nat_rule]['protocol'] == 'udp' %} selected{% endif %}>UDP</option>
               </select>
             </td>
             <td>
@@ -179,6 +179,7 @@
           <div class="panel-status" id="vnic-status">No VNIC scan loaded.</div>
         </div>
         <div class="panel-actions">
+          <button class="btn btn-outline-primary btn-sm" type="button" onclick="scanVnicSources()">Scan</button>
           <button class="btn btn-primary btn-sm" type="button" onclick="configureVnicSources()">Scan & Configure</button>
           <button class="btn btn-outline-primary btn-sm" type="button" onclick="applySnatPool()">Apply SNAT Pool</button>
         </div>
@@ -236,23 +237,23 @@
               <div>{{ nat_rule }}</div>
             </td>
             <td>
-              <select id="temp-dropdown-snat" name="dropdown" value="{{ snat_rules[nat_rule]['protocol'] }}" class="select">
-                <option value="all">ALL</option>
-                <option value="tcp">TCP</option>
-                <option value="udp">UDP</option>
+              <select name="dropdown" class="select">
+                <option value="all"{% if snat_rules[nat_rule]['protocol'] == 'all' %} selected{% endif %}>ALL</option>
+                <option value="tcp"{% if snat_rules[nat_rule]['protocol'] == 'tcp' %} selected{% endif %}>TCP</option>
+                <option value="udp"{% if snat_rules[nat_rule]['protocol'] == 'udp' %} selected{% endif %}>UDP</option>
               </select>
             </td>
             <td>
-              <select id="temp-dropdown-snat2" name="dropdown" value="{{ snat_rules[nat_rule]['target'] }}" class="select">
-                <option value="MASQUERADE">MASQUERADE</option>
-                <option value="SNAT">SNAT</option>
+              <select name="dropdown" class="select">
+                <option value="MASQUERADE"{% if snat_rules[nat_rule]['target'] == 'MASQUERADE' %} selected{% endif %}>MASQUERADE</option>
+                <option value="SNAT"{% if snat_rules[nat_rule]['target'] == 'SNAT' %} selected{% endif %}>SNAT</option>
               </select>
             </td>
             <td>
               <div contenteditable>{{ snat_rules[nat_rule]['source_ip'] }}</div>
             </td>
             <td>
-              <select name="dropdown" value="{{ snat_rules[nat_rule]['output_interface'] }}" class="select snat-interface-select">
+              <select name="dropdown" class="select snat-interface-select">
                 <option value="{{ snat_rules[nat_rule]['output_interface'] }}">{{ snat_rules[nat_rule]['output_interface'] }}</option>
               </select>
             </td>

@@ -88,7 +88,13 @@ REQUIRED_CONFIG_KEYS = (
 
 MANAGED_DNAT_CHAIN = "ONA_PREROUTING"
 MANAGED_SNAT_CHAIN = "ONA_POSTROUTING"
+SNAT_POOL_CHAIN = "ONA_SNAT_POOL"
+SNAT_MARK_CHAIN = "ONA_SNAT_MARK"
 TEMP_CHAIN_SUFFIX = "_CHECK"
+SNAT_POOL_MARK_BASE = 0x4F4E0000
+SNAT_POOL_TABLE_BASE = 30000
+SNAT_POOL_RULE_PRIORITY_BASE = 30000
+SNAT_POOL_MAX_SOURCES = 256
 ALLOWED_DNAT_PROTOCOLS = {"tcp", "udp"}
 ALLOWED_SNAT_PROTOCOLS = {"all", "tcp", "udp"}
 ALLOWED_SNAT_TARGETS = {"MASQUERADE", "SNAT"}
@@ -147,6 +153,10 @@ def load_file_config():
         app.logger.warning("Unable to read ONA config file %s: %s", path, exc)
         return {}
 
+    if not isinstance(data, dict):
+        app.logger.warning("ONA config file %s did not contain a JSON object.", path)
+        return {}
+
     return {
         key: str(value).strip()
         for key, value in data.items()
@@ -156,7 +166,9 @@ def load_file_config():
 
 def write_file_config(config):
     path = config_file_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
 
     data = {
         key: str(value)
@@ -283,29 +295,42 @@ def run_iptables(args, check=True):
     return completed
 
 
-def ensure_chain(chain):
-    result = run_iptables(["-t", "nat", "-N", chain], check=False)
+def ensure_chain(chain, table="nat"):
+    result = run_iptables(["-t", table, "-N", chain], check=False)
     if result.returncode != 0 and "Chain already exists" not in result.stderr:
         message = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(f"Unable to create iptables chain {chain}: {message}")
+        raise RuntimeError(f"Unable to create {table} iptables chain {chain}: {message}")
 
 
-def ensure_jump(source_chain, managed_chain):
-    result = run_iptables(["-t", "nat", "-C", source_chain, "-j", managed_chain], check=False)
+def ensure_jump(source_chain, managed_chain, table="nat", position=None):
+    if position is not None:
+        remove_jump(source_chain, managed_chain, table)
+        run_iptables(["-t", table, "-I", source_chain, str(position), "-j", managed_chain])
+        return
+
+    result = run_iptables(["-t", table, "-C", source_chain, "-j", managed_chain], check=False)
     if result.returncode != 0:
-        run_iptables(["-t", "nat", "-A", source_chain, "-j", managed_chain])
+        run_iptables(["-t", table, "-A", source_chain, "-j", managed_chain])
 
 
-def delete_chain_if_exists(chain):
-    run_iptables(["-t", "nat", "-F", chain], check=False)
-    run_iptables(["-t", "nat", "-X", chain], check=False)
+def remove_jump(source_chain, managed_chain, table="nat"):
+    while True:
+        result = run_iptables(["-t", table, "-C", source_chain, "-j", managed_chain], check=False)
+        if result.returncode != 0:
+            return
+        run_iptables(["-t", table, "-D", source_chain, "-j", managed_chain], check=False)
+
+
+def delete_chain_if_exists(chain, table="nat"):
+    run_iptables(["-t", table, "-F", chain], check=False)
+    run_iptables(["-t", table, "-X", chain], check=False)
 
 
 def ensure_managed_chains():
-    ensure_chain(MANAGED_DNAT_CHAIN)
-    ensure_chain(MANAGED_SNAT_CHAIN)
-    ensure_jump("PREROUTING", MANAGED_DNAT_CHAIN)
-    ensure_jump("POSTROUTING", MANAGED_SNAT_CHAIN)
+    ensure_chain(MANAGED_DNAT_CHAIN, "nat")
+    ensure_chain(MANAGED_SNAT_CHAIN, "nat")
+    ensure_jump("PREROUTING", MANAGED_DNAT_CHAIN, "nat")
+    ensure_jump("POSTROUTING", MANAGED_SNAT_CHAIN, "nat")
 
 
 def get_nat_rules():
@@ -486,6 +511,8 @@ def replace_managed_rules(rules):
 
     run_iptables(["-t", "nat", "-F", MANAGED_DNAT_CHAIN])
     run_iptables(["-t", "nat", "-F", MANAGED_SNAT_CHAIN])
+    if snat_pool_policy()["enabled"]:
+        ensure_snat_pool_jump()
     for rule in rules:
         chain = MANAGED_DNAT_CHAIN if rule["chain"] == "PREROUTING" else MANAGED_SNAT_CHAIN
         run_iptables(build_iptables_command(rule, chain))
@@ -527,6 +554,8 @@ def process_nat_rules(nat_rules):
                     dnat_dictionary_rule[len(dnat_dictionary_rule)] = collect
                     seen.add(key)
             elif chain_name == MANAGED_SNAT_CHAIN:
+                if "-j" in rule_data and rule_data[rule_data.index("-j") + 1] == SNAT_POOL_CHAIN:
+                    continue
                 collect = {
                     "chain": "POSTROUTING",
                     "protocol": rule_data[rule_data.index("-p") + 1]
@@ -577,7 +606,7 @@ def backup_policy(overrides=None):
             {
                 key: str(value).strip()
                 for key, value in overrides.items()
-                if key in CONFIG_KEYS and value is not None and str(value).strip() != ""
+                if key in CONFIG_KEYS and value is not None
             }
         )
 
@@ -641,12 +670,26 @@ def parse_backup_weekday(value):
 
 def parse_backup_retention(value):
     try:
-        retention = int(str(value or DEFAULT_BACKUP_RETENTION).strip())
+        raw_value = DEFAULT_BACKUP_RETENTION if value is None or str(value).strip() == "" else value
+        retention = int(str(raw_value).strip())
     except (TypeError, ValueError):
         raise RuleValidationError("Backup retention must be a number.")
     if retention < 0 or retention > 10000:
         raise RuleValidationError("Backup retention must be between 0 and 10000.")
     return str(retention)
+
+
+def parse_bool(value, field_name):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    raise RuleValidationError(f"{field_name} must be true or false.")
 
 
 def validate_backup_policy_payload(payload):
@@ -677,7 +720,7 @@ def validate_backup_policy_payload(payload):
     if schedule not in ALLOWED_BACKUP_SCHEDULES:
         raise RuleValidationError("Backup schedule is invalid.")
 
-    enabled = bool(payload.get("enabled", False))
+    enabled = parse_bool(payload.get("enabled", False), "Backup enabled")
     if enabled and (not bucket or schedule == "manual"):
         raise RuleValidationError("Enabled backup policies require a bucket and a schedule.")
 
@@ -752,13 +795,29 @@ def list_oci_buckets(overrides=None):
     }
 
 
-def backup_object_allowed(object_name, policy):
+def backup_object_is_zip(object_name):
     name = str(object_name or "")
+    return bool(name) and name.endswith(".zip") and "\x00" not in name
+
+
+def backup_object_allowed(object_name, policy, require_prefix=False):
+    name = str(object_name or "")
+    if not backup_object_is_zip(name):
+        return False
+    if not require_prefix:
+        return True
     prefix = normalize_backup_prefix(policy["prefix"])
-    return name.startswith(prefix) and name.endswith(".zip") and "\x00" not in name
+    return name.startswith(prefix)
 
 
-def list_backup_objects(policy=None):
+def backup_sort_key(backup):
+    return (
+        backup.get("time_created") or backup.get("time_modified") or "",
+        backup.get("name", ""),
+    )
+
+
+def list_backup_objects(policy=None, require_prefix=False):
     policy = policy or backup_policy()
     if not policy["bucket"]:
         return []
@@ -770,16 +829,19 @@ def list_backup_objects(policy=None):
     start = None
 
     while True:
-        kwargs = {"prefix": prefix, "fields": "name,size,timeCreated,timeModified", "limit": 1000}
+        kwargs = {"fields": "name,size,timeCreated,timeModified", "limit": 1000}
+        if require_prefix:
+            kwargs["prefix"] = prefix
         if start:
             kwargs["start"] = start
         response = client.list_objects(namespace, policy["bucket"], **kwargs)
         for obj in response.data.objects:
-            if not backup_object_allowed(obj.name, policy):
+            if not backup_object_allowed(obj.name, policy, require_prefix=require_prefix):
                 continue
             backups.append(
                 {
                     "name": obj.name,
+                    "in_configured_prefix": str(obj.name).startswith(prefix),
                     "size": getattr(obj, "size", 0),
                     "time_created": getattr(obj, "time_created", None).isoformat()
                     if getattr(obj, "time_created", None)
@@ -793,7 +855,7 @@ def list_backup_objects(policy=None):
         if not start:
             break
 
-    backups.sort(key=lambda item: item["name"], reverse=True)
+    backups.sort(key=backup_sort_key, reverse=True)
     return backups
 
 
@@ -803,7 +865,7 @@ def enforce_backup_retention(policy=None):
     if retention <= 0 or not policy["bucket"]:
         return []
 
-    backups = list_backup_objects(policy)
+    backups = list_backup_objects(policy, require_prefix=True)
     expired = backups[retention:]
     if not expired:
         return []
@@ -893,7 +955,7 @@ def restore_backup_object(object_name):
     if not policy["bucket"]:
         raise RuleValidationError("Select a backup bucket before restoring backups.")
     if not backup_object_allowed(object_name, policy):
-        raise RuleValidationError("Backup object is outside the configured backup prefix.")
+        raise RuleValidationError("Backup object must be a .zip file in the selected bucket.")
 
     client = oci_client()
     namespace = object_storage_namespace(client, policy)
@@ -911,8 +973,10 @@ def delete_backup_object(object_name):
     policy = backup_policy()
     if not policy["bucket"]:
         raise RuleValidationError("Select a backup bucket before deleting backups.")
-    if not backup_object_allowed(object_name, policy):
-        raise RuleValidationError("Backup object is outside the configured backup prefix.")
+    if not backup_object_allowed(object_name, policy, require_prefix=True):
+        raise RuleValidationError(
+            "Backup object must be a .zip file in the configured backup prefix."
+        )
 
     client = oci_client()
     namespace = object_storage_namespace(client, policy)
@@ -1100,6 +1164,8 @@ def normalize_vnic_scan(metadata_vnics, interfaces):
                     "configured": ip in configured_ips,
                     "primary": ip == primary_ip,
                     "nic_index": vnic.get("nicIndex", index),
+                    "virtual_router_ip": vnic.get("virtualRouterIp", ""),
+                    "subnet_cidr": vnic.get("subnetCidrBlock", ""),
                 }
             )
 
@@ -1304,7 +1370,14 @@ def configure_vnic_interfaces():
     save_vnic_scan(before_scan)
 
     configuration = run_oci_network_configure()
-    if configuration is None or configuration.get("errors"):
+    fallback_needed = configuration is None or configuration.get("errors")
+    if not fallback_needed:
+        after_oci_scan = normalize_vnic_scan(metadata_vnics, local_interfaces())
+        fallback_needed = any(
+            not item.get("configured")
+            for item in after_oci_scan.get("source_ips", [])
+        )
+    if fallback_needed:
         fallback = configure_vnics_with_ip(metadata_vnics, local_interfaces())
         if configuration and configuration.get("errors"):
             fallback["previous_method"] = configuration["method"]
@@ -1342,16 +1415,59 @@ def snat_pool_policy():
     }
 
 
+def snat_pool_mark(index):
+    return SNAT_POOL_MARK_BASE + index + 1
+
+
+def snat_pool_table(index):
+    return SNAT_POOL_TABLE_BASE + index + 1
+
+
+def snat_pool_priority(index):
+    return SNAT_POOL_RULE_PRIORITY_BASE + index + 1
+
+
+def decorate_snat_pool_sources(sources):
+    if len(sources) > SNAT_POOL_MAX_SOURCES:
+        raise RuleValidationError(
+            f"SNAT pools support up to {SNAT_POOL_MAX_SOURCES} source IPs."
+        )
+    decorated = []
+    for index, source in enumerate(sources):
+        item = dict(source)
+        item["mark"] = snat_pool_mark(index)
+        item["mark_hex"] = hex(item["mark"])
+        item["table"] = snat_pool_table(index)
+        item["priority"] = snat_pool_priority(index)
+        decorated.append(item)
+    return decorated
+
+
 def validate_snat_pool_payload(payload):
     if not isinstance(payload, dict):
         raise RuleValidationError("Expected a JSON object for SNAT pool policy.")
 
-    enabled = bool(payload.get("enabled", False))
+    enabled = parse_bool(payload.get("enabled", False), "SNAT pool enabled")
     source_ips = payload.get("source_ips", [])
     if not isinstance(source_ips, list):
         raise RuleValidationError("SNAT pool source IPs must be a list.")
     source_ips = [parse_ip(ip, "SNAT source IP") for ip in source_ips]
     source_ips = list(dict.fromkeys(source_ips))
+    if len(source_ips) > SNAT_POOL_MAX_SOURCES:
+        raise RuleValidationError(
+            f"SNAT pools support up to {SNAT_POOL_MAX_SOURCES} source IPs."
+        )
+
+    if not enabled:
+        existing_interface = snat_pool_policy().get("interface", "")
+        interface = payload.get("interface", existing_interface)
+        interface = parse_interface(interface) if interface else ""
+        return {
+            "enabled": False,
+            "source_ips": source_ips,
+            "interface": interface,
+            "sources": [],
+        }
 
     scan = vnic_scan_state()
     scanned_ips = {entry["ip"]: entry for entry in scan.get("source_ips", [])}
@@ -1361,45 +1477,104 @@ def validate_snat_pool_payload(payload):
     unconfigured_ips = [ip for ip in source_ips if not scanned_ips[ip].get("configured")]
     if unconfigured_ips:
         raise RuleValidationError("SNAT source IPs must be configured on the OS before use.")
-    if enabled and not source_ips:
+    if not source_ips:
         raise RuleValidationError("Enable the SNAT pool only after selecting at least one source IP.")
 
-    source_entries = [
-        {
-            "ip": ip,
-            "interface": scanned_ips[ip].get("interface", ""),
-        }
-        for ip in source_ips
-    ]
+    source_entries = []
+    for ip in source_ips:
+        scanned_entry = scanned_ips[ip]
+        source_entries.append(
+            {
+                "ip": ip,
+                "interface": scanned_entry.get("interface", ""),
+                "virtual_router_ip": scanned_entry.get("virtual_router_ip", ""),
+                "vnic_id": scanned_entry.get("vnic_id", ""),
+            }
+        )
     missing_interfaces = [entry["ip"] for entry in source_entries if not entry["interface"]]
     if missing_interfaces:
         raise RuleValidationError("Selected SNAT source IPs must have an OS interface.")
+    missing_routers = [entry["ip"] for entry in source_entries if not entry["virtual_router_ip"]]
+    if missing_routers:
+        raise RuleValidationError("Selected SNAT source IPs must have a VNIC virtual router IP.")
+    for entry in source_entries:
+        entry["interface"] = parse_interface(entry["interface"])
+        if entry["virtual_router_ip"]:
+            entry["virtual_router_ip"] = parse_ip(entry["virtual_router_ip"], "VNIC virtual router IP")
 
     interface = parse_interface(payload.get("interface", "")) if payload.get("interface") else ""
     if not interface and source_entries:
         interface = source_entries[0]["interface"]
-    if enabled and not interface:
+    if not interface:
         raise RuleValidationError("An output interface is required for the SNAT pool.")
 
     return {
         "enabled": enabled,
         "source_ips": source_ips,
         "interface": interface,
-        "sources": source_entries,
+        "sources": decorate_snat_pool_sources(source_entries),
     }
 
 
-def snat_pool_commands(pool, chain):
-    commands = []
+def snat_pool_sources(pool):
     sources = pool.get("sources") or [
         {"ip": source_ip, "interface": pool.get("interface", "")}
         for source_ip in pool["source_ips"]
     ]
+    if sources and "mark" not in sources[0]:
+        sources = decorate_snat_pool_sources(sources)
+    return sources
+
+
+def ensure_snat_pool_jump():
+    ensure_chain(SNAT_POOL_CHAIN, "nat")
+    ensure_jump(MANAGED_SNAT_CHAIN, SNAT_POOL_CHAIN, "nat", position=1)
+
+
+def ensure_snat_mark_jump():
+    ensure_chain(SNAT_MARK_CHAIN, "mangle")
+    ensure_jump("PREROUTING", SNAT_MARK_CHAIN, "mangle", position=1)
+
+
+def ensure_snat_pool_chains():
+    ensure_managed_chains()
+    ensure_snat_pool_jump()
+    ensure_snat_mark_jump()
+
+
+def snat_pool_nat_commands(pool, chain):
+    commands = []
+    for source in snat_pool_sources(pool):
+        command = [
+            "-t",
+            "nat",
+            "-A",
+            chain,
+            "-m",
+            "mark",
+            "--mark",
+            source["mark_hex"],
+            "-o",
+            source["interface"],
+            "-j",
+            "SNAT",
+            "--to-source",
+            source["ip"],
+        ]
+        commands.append(command)
+    return commands
+
+
+def snat_pool_mark_commands(pool, chain):
+    commands = [
+        ["-t", "mangle", "-A", chain, "-m", "addrtype", "--dst-type", "LOCAL", "-j", "RETURN"],
+        ["-t", "mangle", "-A", chain, "-j", "CONNMARK", "--restore-mark"],
+        ["-t", "mangle", "-A", chain, "-m", "mark", "!", "--mark", "0x0", "-j", "RETURN"],
+    ]
+    sources = snat_pool_sources(pool)
     remaining = len(sources)
     for index, source in enumerate(sources):
-        command = ["-t", "nat", "-A", chain, "-p", "all"]
-        if source.get("interface"):
-            command.extend(["-o", source["interface"]])
+        command = ["-t", "mangle", "-A", chain]
         if index < len(sources) - 1:
             probability = 1 / remaining
             command.extend(
@@ -1412,16 +1587,134 @@ def snat_pool_commands(pool, chain):
                     f"{probability:.8f}",
                 ]
             )
-        command.extend(["-j", "SNAT", "--to-source", source["ip"]])
+        command.extend(["-j", "MARK", "--set-mark", source["mark_hex"]])
         commands.append(command)
+        commands.append(
+            [
+                "-t",
+                "mangle",
+                "-A",
+                chain,
+                "-m",
+                "mark",
+                "--mark",
+                source["mark_hex"],
+                "-j",
+                "CONNMARK",
+                "--save-mark",
+            ]
+        )
+        commands.append(
+            [
+                "-t",
+                "mangle",
+                "-A",
+                chain,
+                "-m",
+                "mark",
+                "--mark",
+                source["mark_hex"],
+                "-j",
+                "RETURN",
+            ]
+        )
         remaining -= 1
     return commands
 
 
-def apply_snat_pool(pool):
+def validate_snat_pool_runtime_commands(pool):
+    nat_temp_chain = f"{SNAT_POOL_CHAIN}{TEMP_CHAIN_SUFFIX}"
+    mark_temp_chain = f"{SNAT_MARK_CHAIN}{TEMP_CHAIN_SUFFIX}"
+    delete_chain_if_exists(nat_temp_chain, "nat")
+    delete_chain_if_exists(mark_temp_chain, "mangle")
+    try:
+        run_iptables(["-t", "nat", "-N", nat_temp_chain])
+        run_iptables(["-t", "mangle", "-N", mark_temp_chain])
+        for command in snat_pool_nat_commands(pool, nat_temp_chain):
+            run_iptables(command)
+        for command in snat_pool_mark_commands(pool, mark_temp_chain):
+            run_iptables(command)
+    finally:
+        delete_chain_if_exists(nat_temp_chain, "nat")
+        delete_chain_if_exists(mark_temp_chain, "mangle")
+
+
+def clear_snat_pool_policy_routes():
+    for index in range(SNAT_POOL_MAX_SOURCES):
+        mark = hex(snat_pool_mark(index))
+        table = str(snat_pool_table(index))
+        priority = str(snat_pool_priority(index))
+        while True:
+            result = run_ip(
+                ["rule", "del", "fwmark", mark, "table", table, "priority", priority],
+                check=False,
+            )
+            if result.returncode != 0:
+                break
+        run_ip(["route", "flush", "table", table], check=False)
+
+
+def configure_snat_pool_policy_routes(pool):
+    try:
+        for source in snat_pool_sources(pool):
+            run_ip(
+                [
+                    "route",
+                    "replace",
+                    "default",
+                    "via",
+                    source["virtual_router_ip"],
+                    "dev",
+                    source["interface"],
+                    "table",
+                    str(source["table"]),
+                ]
+            )
+            run_ip(
+                [
+                    "rule",
+                    "add",
+                    "fwmark",
+                    source["mark_hex"],
+                    "table",
+                    str(source["table"]),
+                    "priority",
+                    str(source["priority"]),
+                ]
+            )
+    except RuntimeError:
+        clear_snat_pool_policy_routes()
+        raise
+
+
+def write_proc_value(path, value):
+    try:
+        with open(path, "w", encoding="utf-8") as proc_file:
+            proc_file.write(str(value))
+    except OSError as exc:
+        raise RuntimeError(f"Unable to write {path}: {exc}") from exc
+
+
+def configure_snat_pool_sysctls(pool):
+    write_proc_value("/proc/sys/net/ipv4/ip_forward", "1")
+    for name in ("all", "default", *[source["interface"] for source in snat_pool_sources(pool)]):
+        path = f"/proc/sys/net/ipv4/conf/{name}/rp_filter"
+        if os.path.exists(path):
+            write_proc_value(path, "0")
+
+
+def clear_snat_pool_runtime():
     ensure_managed_chains()
+    remove_jump(MANAGED_SNAT_CHAIN, SNAT_POOL_CHAIN, "nat")
+    remove_jump("PREROUTING", SNAT_MARK_CHAIN, "mangle")
+    delete_chain_if_exists(SNAT_POOL_CHAIN, "nat")
+    delete_chain_if_exists(SNAT_MARK_CHAIN, "mangle")
+    clear_snat_pool_policy_routes()
+
+
+def apply_snat_pool(pool):
     if not pool["enabled"]:
-        run_iptables(["-t", "nat", "-F", MANAGED_SNAT_CHAIN])
+        clear_snat_pool_runtime()
         save_file_config(
             {
                 "ONA_SNAT_POOL_ENABLED": "false",
@@ -1431,18 +1724,36 @@ def apply_snat_pool(pool):
         )
         return
 
-    temp_chain = f"{MANAGED_SNAT_CHAIN}{TEMP_CHAIN_SUFFIX}"
-    delete_chain_if_exists(temp_chain)
-    run_iptables(["-t", "nat", "-N", temp_chain])
+    pool = dict(pool)
+    pool["sources"] = snat_pool_sources(pool)
+    validate_snat_pool_runtime_commands(pool)
+    runtime_cleared = False
     try:
-        for command in snat_pool_commands(pool, temp_chain):
+        clear_snat_pool_runtime()
+        runtime_cleared = True
+        configure_snat_pool_sysctls(pool)
+        configure_snat_pool_policy_routes(pool)
+        ensure_snat_pool_chains()
+        run_iptables(["-t", "nat", "-F", SNAT_POOL_CHAIN])
+        run_iptables(["-t", "mangle", "-F", SNAT_MARK_CHAIN])
+        for command in snat_pool_mark_commands(pool, SNAT_MARK_CHAIN):
             run_iptables(command)
-    finally:
-        delete_chain_if_exists(temp_chain)
-
-    run_iptables(["-t", "nat", "-F", MANAGED_SNAT_CHAIN])
-    for command in snat_pool_commands(pool, MANAGED_SNAT_CHAIN):
-        run_iptables(command)
+        for command in snat_pool_nat_commands(pool, SNAT_POOL_CHAIN):
+            run_iptables(command)
+    except Exception:
+        if runtime_cleared:
+            try:
+                clear_snat_pool_runtime()
+            except Exception:
+                app.logger.exception("Unable to clean up partial SNAT pool runtime state")
+            save_file_config(
+                {
+                    "ONA_SNAT_POOL_ENABLED": "false",
+                    "ONA_SNAT_POOL_IPS": ",".join(pool["source_ips"]),
+                    "ONA_SNAT_POOL_INTERFACE": pool["interface"],
+                }
+            )
+        raise
 
     save_file_config(
         {
@@ -1881,7 +2192,6 @@ def dnoa(current_user):
         app.logger.exception("Unable to update iptables rules")
         return jsonify({"error": str(exc)}), 500
 
-    flash("Submit successful")
     return jsonify(
         {
             "message": "Submit successful",
@@ -2002,7 +2312,18 @@ def api_vnics_snat_pool(current_user):
         data = request.get_json(silent=True)
         if data is None:
             raise RuleValidationError("Expected JSON request body.")
-        configuration = configure_vnic_interfaces()
+        configuration = {
+            "scan": vnic_scan_state(),
+            "configuration": {
+                "method": "none",
+                "results": [],
+                "errors": [],
+                "configured_count": 0,
+                "configured_ips": [],
+            },
+        }
+        if parse_bool(data.get("enabled", False), "SNAT pool enabled"):
+            configuration = configure_vnic_interfaces()
         pool = validate_snat_pool_payload(data)
         apply_snat_pool(pool)
         nat_rules = process_nat_rules(get_nat_rules())
