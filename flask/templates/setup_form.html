@@ -9,12 +9,21 @@
 
 <body>
     <h1>Setup Configuration</h1>
+    {% with messages = get_flashed_messages() %}
+    {% if messages %}
+    {% for message in messages %}
+    <p>{{ message }}</p>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
     <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
         <label for="client_id">Oracle Client ID:</label><br>
         <input type="text" id="client_id" name="client_id" required><br><br>
 
         <label for="client_secret">Oracle IDCS Secret:</label><br>
-        <input type="text" id="client_secret" name="client_secret" required><br><br>
+        <input type="password" id="client_secret" name="client_secret" required><br><br>
 
         <label for="idcs_url">Oracle IDCS URL:</label><br>
         <input type="text" id="idcs_url" name="idcs_url" required><br><br>

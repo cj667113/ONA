@@ -1,16 +1,13 @@
 #!/bin/bash
+set -euo pipefail
 
 # Enable IP forwarding
-echo "1" > /proc/sys/net/ipv4/ip_forward
+echo "1" > /proc/sys/net/ipv4/ip_forward || true
 
 # Load required kernel modules
-modprobe ip_tables
-modprobe ip_conntrack
-modprobe ip_conntrack_irc
-modprobe ip_conntrack_ftp
-
-# Unload unwanted modules
-modprobe -r iptable_filter iptable_nat iptable_mangle iptable_raw iptable_security
+for module in ip_tables iptable_nat nf_nat nf_conntrack nf_conntrack_ftp; do
+  modprobe "$module" || true
+done
 
 # Keep the container running
 exec "$@"

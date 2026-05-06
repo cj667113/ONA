@@ -9,6 +9,70 @@
 {% endif %}
 {% endwith %}
 
+<section class="mb-4" id="stats-panel">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Gateway Dashboard</h2>
+    <div class="text-muted small">Updated <span id="metric-updated">-</span></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-3">
+      <div class="metric-tile p-3">
+        <div class="metric-label">CPU</div>
+        <div class="metric-value" id="metric-cpu-percent">-</div>
+        <div class="metric-subtext" id="metric-cpu-load">Load -</div>
+        <div class="progress metric-progress mt-2">
+          <div id="metric-cpu-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-tile p-3">
+        <div class="metric-label">Memory</div>
+        <div class="metric-value" id="metric-memory-percent">-</div>
+        <div class="metric-subtext" id="metric-memory-detail">- used</div>
+        <div class="progress metric-progress mt-2">
+          <div id="metric-memory-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-tile p-3">
+        <div class="metric-label">NAT Ports</div>
+        <div class="metric-value" id="metric-ports-used">-</div>
+        <div class="metric-subtext" id="metric-ports-detail">- available</div>
+        <div class="progress metric-progress mt-2">
+          <div id="metric-ports-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-tile p-3">
+        <div class="metric-label">Connections</div>
+        <div class="metric-value" id="metric-connections-total">-</div>
+        <div class="metric-subtext" id="metric-conn-rate">- conn/sec</div>
+        <div class="progress metric-progress mt-2">
+          <div id="metric-connections-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="metric-tile p-3">
+        <div class="metric-label">Network Throughput</div>
+        <div class="metric-value" id="metric-throughput-bytes">-</div>
+        <div class="metric-subtext" id="metric-throughput-detail">RX - / TX -</div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="metric-tile p-3">
+        <div class="metric-label">Packet Throughput</div>
+        <div class="metric-value" id="metric-throughput-packets">-</div>
+        <div class="metric-subtext" id="metric-rule-counts">DNAT - / SNAT -</div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <div class="container-fluid">
   <div class="row">
     <div class="col-lg-15 text-center">
@@ -30,7 +94,7 @@
               <div>{{ nat_rule }}</div>
             </td>
             <td>
-              <select id="temp-dropdown-dnat" name="dropdown" value={{dnat_rules[nat_rule]['protocol']}} class="select">
+              <select id="temp-dropdown-dnat" name="dropdown" value="{{ dnat_rules[nat_rule]['protocol'] }}" class="select">
                 <option value="tcp">TCP</option>
                 <option value="udp">UDP</option>
               </select>
@@ -71,18 +135,19 @@
         </thead>
         <tbody>
           {% for nat_rule in snat_rules.keys() if snat_rules[nat_rule]['chain']=='POSTROUTING' %}
-          <tr>
+          <tr{% if snat_rules[nat_rule].get('probability') %} data-probability="{{ snat_rules[nat_rule]['probability'] }}"{% endif %}>
             <td>
               <div>{{ nat_rule }}</div>
             </td>
             <td>
-              <select id="temp-dropdown-snat" name="dropdown" value={{snat_rules[nat_rule]['protocol']}} class="select">
+              <select id="temp-dropdown-snat" name="dropdown" value="{{ snat_rules[nat_rule]['protocol'] }}" class="select">
+                <option value="all">ALL</option>
                 <option value="tcp">TCP</option>
                 <option value="udp">UDP</option>
               </select>
             </td>
             <td>
-              <select id="temp-dropdown-snat2" name="dropdown" value={{snat_rules[nat_rule]['target']}} class="select">
+              <select id="temp-dropdown-snat2" name="dropdown" value="{{ snat_rules[nat_rule]['target'] }}" class="select">
                 <option value="MASQUERADE">MASQUERADE</option>
                 <option value="SNAT">SNAT</option>
               </select>
@@ -103,5 +168,165 @@
     </div>
   </div>
 </div>
+
+<div class="container mt-3" id="bottom-container">
+  <div class="row justify-content-center">
+    <div class="col text-center">
+      <button onclick="addRule()" type="button" value="default" class="btn btn-outline-primary btn-md">Add
+        Rule</button>
+      <button onclick="sendJson()" type="button" value="default" class="btn btn-outline-primary btn-md">Submit</button>
+    </div>
+  </div>
+</div>
+
+<section class="mt-4 pt-4 border-top" id="vnic-panel">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">SNAT Source Pool</h2>
+    <div class="text-muted small" id="vnic-status">No VNIC scan loaded.</div>
+  </div>
+
+  <div class="row g-3 align-items-end">
+    <div class="col-md-3">
+      <label for="snat-pool-interface" class="form-label">Output interface</label>
+      <select id="snat-pool-interface" class="form-select form-select-sm"></select>
+    </div>
+    <div class="col-md-3">
+      <div class="form-check">
+        <input id="snat-pool-enabled" class="form-check-input" type="checkbox">
+        <label for="snat-pool-enabled" class="form-check-label">Use selected IPs for SNAT</label>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="metric-label">Estimated source ports</div>
+      <div class="metric-subtext" id="snat-pool-capacity">-</div>
+    </div>
+    <div class="col-md-3 text-md-end">
+      <button class="btn btn-outline-primary btn-sm" type="button" onclick="rescanVnics()">Rescan VNICs</button>
+      <button class="btn btn-primary btn-sm" type="button" onclick="applySnatPool()">Apply Pool</button>
+    </div>
+  </div>
+
+  <div class="table-responsive mt-3">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Use</th>
+          <th>Private IP</th>
+          <th>VNIC</th>
+          <th>Interface</th>
+          <th>NIC</th>
+          <th>Status</th>
+          <th>Subnet</th>
+        </tr>
+      </thead>
+      <tbody id="vnic-list">
+        <tr>
+          <td colspan="7" class="text-muted">Click Rescan VNICs after attaching or configuring secondary VNICs.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mt-4 pt-4 border-top" id="backup-panel">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Object Storage Backups</h2>
+    <div class="text-muted small" id="backup-status">Loading backup status...</div>
+  </div>
+
+  <div class="row g-3 align-items-end">
+    <div class="col-md-3">
+      <label for="backup-auth-method" class="form-label">OCI auth</label>
+      <select id="backup-auth-method" class="form-select form-select-sm">
+        <option value="instance_principal">Instance principal</option>
+        <option value="resource_principal">Resource principal</option>
+        <option value="config_file">Config file</option>
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label for="backup-region" class="form-label">Region</label>
+      <input id="backup-region" class="form-control form-control-sm" placeholder="us-ashburn-1">
+    </div>
+    <div class="col-md-6">
+      <label for="backup-compartment" class="form-label">Compartment OCID</label>
+      <input id="backup-compartment" class="form-control form-control-sm" placeholder="ocid1.compartment...">
+    </div>
+    <div class="col-md-3">
+      <label for="backup-namespace" class="form-label">Namespace</label>
+      <input id="backup-namespace" class="form-control form-control-sm" placeholder="Optional">
+    </div>
+    <div class="col-md-5">
+      <label for="backup-bucket" class="form-label">Bucket</label>
+      <div class="input-group input-group-sm">
+        <select id="backup-bucket" class="form-select"></select>
+        <button class="btn btn-outline-primary" type="button" onclick="refreshBuckets()">Refresh</button>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <label for="backup-prefix" class="form-label">Prefix</label>
+      <input id="backup-prefix" class="form-control form-control-sm" placeholder="ona-backups/">
+    </div>
+  </div>
+
+  <div class="row g-3 align-items-end mt-1">
+    <div class="col-md-2">
+      <label for="backup-schedule" class="form-label">Schedule</label>
+      <select id="backup-schedule" class="form-select form-select-sm">
+        <option value="manual">Manual only</option>
+        <option value="hourly">Hourly</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label for="backup-time" class="form-label">UTC time</label>
+      <input id="backup-time" type="time" class="form-control form-control-sm" value="00:00">
+    </div>
+    <div class="col-md-2">
+      <label for="backup-weekday" class="form-label">Day</label>
+      <select id="backup-weekday" class="form-select form-select-sm">
+        <option value="0">Monday</option>
+        <option value="1">Tuesday</option>
+        <option value="2">Wednesday</option>
+        <option value="3">Thursday</option>
+        <option value="4">Friday</option>
+        <option value="5">Saturday</option>
+        <option value="6">Sunday</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label for="backup-retention" class="form-label">Keep latest</label>
+      <input id="backup-retention" type="number" min="0" max="10000" class="form-control form-control-sm" value="30">
+    </div>
+    <div class="col-md-2">
+      <div class="form-check">
+        <input id="backup-enabled" class="form-check-input" type="checkbox">
+        <label for="backup-enabled" class="form-check-label">Enable scheduled backups</label>
+      </div>
+    </div>
+    <div class="col-md-2 text-md-end">
+      <button class="btn btn-outline-primary btn-sm" type="button" onclick="saveBackupPolicy()">Save Policy</button>
+      <button class="btn btn-primary btn-sm" type="button" onclick="runBackupNow()">Backup Now</button>
+    </div>
+  </div>
+
+  <div class="table-responsive mt-3">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Backup object</th>
+          <th class="text-end">Size</th>
+          <th>Created</th>
+          <th class="text-end">Action</th>
+        </tr>
+      </thead>
+      <tbody id="backup-list">
+        <tr>
+          <td colspan="4" class="text-muted">No backups loaded.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
 
 {% endblock %}
