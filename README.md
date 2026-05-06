@@ -59,7 +59,11 @@ To run ONA as a docker container run:
       -e ONA_SECRET_KEY="$ONA_SECRET_KEY" \
       ona
 
-Use an HTTPS `ADDRESS` when TLS is terminated in front of the container. For lab-only direct Flask HTTP deployments, set `ADDRESS=http://IP_OR_DNS_OF_THE_NODE:5000` and add `-e OAUTHLIB_INSECURE_TRANSPORT=1`.
+Use an HTTPS `ADDRESS` when TLS is terminated in front of the container. The OCI Confidential Application redirect URL must match the same scheme and host, for example `https://DNS_NAME_FOR_THE_NODE/login/callback`.
+
+If `/login/callback` logs `InsecureTransportError: OAuth 2 MUST utilize https`, Flask is receiving the callback as HTTP. Fix the public URL and redirect URL to use HTTPS, or make sure your reverse proxy/load balancer forwards `X-Forwarded-Proto: https`.
+
+For lab-only direct Flask HTTP deployments, set `ADDRESS=http://IP_OR_DNS_OF_THE_NODE:5000`, add `-e OAUTHLIB_INSECURE_TRANSPORT=1` to `docker run`, and configure the OCI redirect URL as `http://IP_OR_DNS_OF_THE_NODE:5000/login/callback`.
 
 ## Step 7: Optional Object Storage Backups
 The Backups panel in the UI can list Object Storage buckets, create zip backups of the ONA-managed iptables rules, schedule recurring backups, and restore a selected backup.

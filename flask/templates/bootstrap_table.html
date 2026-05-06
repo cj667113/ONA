@@ -9,81 +9,83 @@
 {% endif %}
 {% endwith %}
 
-<section class="mb-4" id="stats-panel">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="h5 mb-0">Gateway Dashboard</h2>
-    <div class="text-muted small">Updated <span id="metric-updated">-</span></div>
+<div id="dashboard-view" class="tab-view">
+<section class="app-panel" id="stats-panel">
+  <div class="panel-header">
+    <h2 class="panel-title">Gateway Dashboard</h2>
+    <div class="panel-status">Updated <span id="metric-updated">-</span></div>
   </div>
 
-  <div class="row g-3">
-    <div class="col-md-3">
-      <div class="metric-tile p-3">
-        <div class="metric-label">CPU</div>
-        <div class="metric-value" id="metric-cpu-percent">-</div>
-        <div class="metric-subtext" id="metric-cpu-load">Load -</div>
-        <div class="progress metric-progress mt-2">
-          <div id="metric-cpu-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
-        </div>
+  <div class="metric-grid">
+    <div class="metric-tile">
+      <div class="metric-label">CPU</div>
+      <div class="metric-value" id="metric-cpu-percent">-</div>
+      <div class="metric-subtext" id="metric-cpu-load">Load -</div>
+      <div class="progress metric-progress mt-2">
+        <div id="metric-cpu-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="metric-tile p-3">
-        <div class="metric-label">Memory</div>
-        <div class="metric-value" id="metric-memory-percent">-</div>
-        <div class="metric-subtext" id="metric-memory-detail">- used</div>
-        <div class="progress metric-progress mt-2">
-          <div id="metric-memory-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
-        </div>
+    <div class="metric-tile">
+      <div class="metric-label">Memory</div>
+      <div class="metric-value" id="metric-memory-percent">-</div>
+      <div class="metric-subtext" id="metric-memory-detail">- used</div>
+      <div class="progress metric-progress mt-2">
+        <div id="metric-memory-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="metric-tile p-3">
-        <div class="metric-label">NAT Ports</div>
-        <div class="metric-value" id="metric-ports-used">-</div>
-        <div class="metric-subtext" id="metric-ports-detail">- available</div>
-        <div class="progress metric-progress mt-2">
-          <div id="metric-ports-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
-        </div>
+    <div class="metric-tile">
+      <div class="metric-label">NAT Ports</div>
+      <div class="metric-value" id="metric-ports-used">-</div>
+      <div class="metric-subtext" id="metric-ports-detail">- available</div>
+      <div class="progress metric-progress mt-2">
+        <div id="metric-ports-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="metric-tile p-3">
-        <div class="metric-label">Connections</div>
-        <div class="metric-value" id="metric-connections-total">-</div>
-        <div class="metric-subtext" id="metric-conn-rate">- conn/sec</div>
-        <div class="progress metric-progress mt-2">
-          <div id="metric-connections-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
-        </div>
+    <div class="metric-tile">
+      <div class="metric-label">Connections</div>
+      <div class="metric-value" id="metric-connections-total">-</div>
+      <div class="metric-subtext" id="metric-conn-rate">- conn/sec</div>
+      <div class="progress metric-progress mt-2">
+        <div id="metric-connections-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
       </div>
     </div>
-    <div class="col-md-6">
-      <div class="metric-tile p-3">
-        <div class="metric-label">Network Throughput</div>
-        <div class="metric-value" id="metric-throughput-bytes">-</div>
-        <div class="metric-subtext" id="metric-throughput-detail">RX - / TX -</div>
-      </div>
+    <div class="metric-tile wide">
+      <div class="metric-label">Network Throughput</div>
+      <div class="metric-value" id="metric-throughput-bytes">-</div>
+      <div class="metric-subtext" id="metric-throughput-detail">RX - / TX -</div>
     </div>
-    <div class="col-md-6">
-      <div class="metric-tile p-3">
-        <div class="metric-label">Packet Throughput</div>
-        <div class="metric-value" id="metric-throughput-packets">-</div>
-        <div class="metric-subtext" id="metric-rule-counts">DNAT - / SNAT -</div>
-      </div>
+    <div class="metric-tile wide">
+      <div class="metric-label">Packet Throughput</div>
+      <div class="metric-value" id="metric-throughput-packets">-</div>
+      <div class="metric-subtext" id="metric-rule-counts">DNAT - / SNAT -</div>
     </div>
   </div>
 </section>
+</div>
 
-<div class="container-fluid">
-  <div class="row">
-    <div class="col-lg-15 text-center">
-      <table id="dnat-table" class="table">
+<div id="dnat-view" class="tab-view d-none">
+<section class="app-panel" id="dnat-panel">
+  <div class="panel-header">
+    <div>
+      <h2 class="panel-title">Destination NAT Rules</h2>
+      <div class="panel-status">Inbound forwarding</div>
+    </div>
+    <div class="panel-actions">
+      <button onclick="addRule()" type="button" value="default" class="btn btn-outline-primary btn-sm">Add Rule</button>
+      <button onclick="sendJson()" type="button" value="default" class="btn btn-primary btn-sm">Submit</button>
+    </div>
+  </div>
+
+  <div class="table-shell">
+    <table id="dnat-table" class="table ona-table">
         <thead>
           <tr>
-            <th class="text-center">Rule Number</th>
-            <th class="text-center">Protocol</th>
-            <th class="text-center">Destination Port</th>
-            <th class="text-center">Forward IP</th>
-            <th class="text-center">Forward Port</th>
+            <th>Rule</th>
+            <th>Protocol</th>
+            <th>Destination Port</th>
+            <th>Forward IP</th>
+            <th>Forward Port</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -114,23 +116,83 @@
           </tr>
           {% endfor %}
         </tbody>
-      </table>
-    </div>
+    </table>
   </div>
+</section>
 </div>
 
+<div id="snat-view" class="tab-view d-none">
+<section class="app-panel" id="snat-panel">
+  <div class="panel-header">
+    <div>
+      <h2 class="panel-title">Source NAT Rules</h2>
+      <div class="panel-status">Interfaces and source addresses</div>
+    </div>
+    <div class="panel-actions">
+      <button onclick="addRule()" type="button" value="default" class="btn btn-outline-primary btn-sm">Add Rule</button>
+      <button onclick="sendJson()" type="button" value="default" class="btn btn-primary btn-sm">Submit</button>
+    </div>
+  </div>
 
-<div class="container-fluid">
-  <div class="row">
-    <div class="col-lg-15 text-center">
-      <table id="snat-table" class="table d-none">
+    <div class="source-controls" id="vnic-panel">
+      <div class="panel-header mb-3">
+        <div>
+          <h3 class="panel-title">Source Addresses</h3>
+          <div class="panel-status" id="vnic-status">No VNIC scan loaded.</div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-outline-primary btn-sm" type="button" onclick="rescanVnics()">Rescan VNICs</button>
+          <button class="btn btn-primary btn-sm" type="button" onclick="applySnatPool()">Apply Sources</button>
+        </div>
+      </div>
+
+      <div class="source-controls-grid">
+        <div>
+          <label for="snat-pool-interface" class="form-label">Output interface</label>
+          <select id="snat-pool-interface" class="form-select form-select-sm"></select>
+        </div>
+        <div class="form-check mb-2">
+          <input id="snat-pool-enabled" class="form-check-input" type="checkbox">
+          <label for="snat-pool-enabled" class="form-check-label">Use selected IPs</label>
+        </div>
+        <div>
+          <div class="metric-label">Estimated source ports</div>
+          <div class="metric-subtext" id="snat-pool-capacity">-</div>
+        </div>
+      </div>
+
+      <div class="table-shell">
+        <table class="table table-sm ona-table align-middle">
+          <thead>
+            <tr>
+              <th>Use</th>
+              <th>Private IP</th>
+              <th>VNIC</th>
+              <th>Interface</th>
+              <th>NIC</th>
+              <th>Status</th>
+              <th>Subnet</th>
+            </tr>
+          </thead>
+          <tbody id="vnic-list">
+            <tr>
+              <td colspan="7" class="compact-empty">No VNIC IPs scanned.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="table-shell">
+      <table id="snat-table" class="table ona-table">
         <thead>
           <tr>
-            <th class="text-center">Rule Number</th>
-            <th class="text-center">Protocol</th>
-            <th class="text-center">SNAT</th>
-            <th class="text-center">Source IP</th>
-            <th class="text-center">Interface</th>
+            <th>Rule</th>
+            <th>Protocol</th>
+            <th>Mode</th>
+            <th>Source IP</th>
+            <th>Interface</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -156,7 +218,9 @@
               <div contenteditable>{{ snat_rules[nat_rule]['source_ip'] }}</div>
             </td>
             <td>
-              <div contenteditable>{{ snat_rules[nat_rule]['output_interface'] }}</div>
+              <select name="dropdown" value="{{ snat_rules[nat_rule]['output_interface'] }}" class="select snat-interface-select">
+                <option value="{{ snat_rules[nat_rule]['output_interface'] }}">{{ snat_rules[nat_rule]['output_interface'] }}</option>
+              </select>
             </td>
             <td>
               <div><button onclick="deleteRule(this)" class="btn btn-outline-danger btn-sm">X</button></div>
@@ -166,72 +230,14 @@
         </tbody>
       </table>
     </div>
-  </div>
-</div>
-
-<div class="container mt-3" id="bottom-container">
-  <div class="row justify-content-center">
-    <div class="col text-center">
-      <button onclick="addRule()" type="button" value="default" class="btn btn-outline-primary btn-md">Add
-        Rule</button>
-      <button onclick="sendJson()" type="button" value="default" class="btn btn-outline-primary btn-md">Submit</button>
-    </div>
-  </div>
-</div>
-
-<section class="mt-4 pt-4 border-top" id="vnic-panel">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="h5 mb-0">SNAT Source Pool</h2>
-    <div class="text-muted small" id="vnic-status">No VNIC scan loaded.</div>
-  </div>
-
-  <div class="row g-3 align-items-end">
-    <div class="col-md-3">
-      <label for="snat-pool-interface" class="form-label">Output interface</label>
-      <select id="snat-pool-interface" class="form-select form-select-sm"></select>
-    </div>
-    <div class="col-md-3">
-      <div class="form-check">
-        <input id="snat-pool-enabled" class="form-check-input" type="checkbox">
-        <label for="snat-pool-enabled" class="form-check-label">Use selected IPs for SNAT</label>
-      </div>
-    </div>
-    <div class="col-md-3">
-      <div class="metric-label">Estimated source ports</div>
-      <div class="metric-subtext" id="snat-pool-capacity">-</div>
-    </div>
-    <div class="col-md-3 text-md-end">
-      <button class="btn btn-outline-primary btn-sm" type="button" onclick="rescanVnics()">Rescan VNICs</button>
-      <button class="btn btn-primary btn-sm" type="button" onclick="applySnatPool()">Apply Pool</button>
-    </div>
-  </div>
-
-  <div class="table-responsive mt-3">
-    <table class="table table-sm align-middle">
-      <thead>
-        <tr>
-          <th>Use</th>
-          <th>Private IP</th>
-          <th>VNIC</th>
-          <th>Interface</th>
-          <th>NIC</th>
-          <th>Status</th>
-          <th>Subnet</th>
-        </tr>
-      </thead>
-      <tbody id="vnic-list">
-        <tr>
-          <td colspan="7" class="text-muted">Click Rescan VNICs after attaching or configuring secondary VNICs.</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
 </section>
+</div>
 
-<section class="mt-4 pt-4 border-top" id="backup-panel">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="h5 mb-0">Object Storage Backups</h2>
-    <div class="text-muted small" id="backup-status">Loading backup status...</div>
+<div id="backups-view" class="tab-view d-none">
+<section class="app-panel" id="backup-panel">
+  <div class="panel-header">
+    <h2 class="panel-title">Object Storage Backups</h2>
+    <div class="panel-status" id="backup-status">Loading backup status...</div>
   </div>
 
   <div class="row g-3 align-items-end">
@@ -310,8 +316,8 @@
     </div>
   </div>
 
-  <div class="table-responsive mt-3">
-    <table class="table table-sm align-middle">
+  <div class="table-shell mt-3">
+    <table class="table table-sm ona-table align-middle">
       <thead>
         <tr>
           <th>Backup object</th>
@@ -328,5 +334,6 @@
     </table>
   </div>
 </section>
+</div>
 
 {% endblock %}

@@ -1,9 +1,14 @@
 let ruleType = "dnat";
+let dashboardButton = document.getElementById("dashboard-btn");
 let dnatButton = document.getElementById("dnat-btn");
 let snatButton = document.getElementById("snat-btn");
-let bottomContainer = document.getElementById("bottom-container");
+let backupsButton = document.getElementById("backups-btn");
 let dnatTable = document.getElementById("dnat-table");
 let snatTable = document.getElementById("snat-table");
+let dashboardView = document.getElementById("dashboard-view");
+let dnatView = document.getElementById("dnat-view");
+let snatView = document.getElementById("snat-view");
+let backupsView = document.getElementById("backups-view");
 let tempDeleteButton = document.getElementById("temp-delete-btn");
 let tempDropDown = document.getElementById("temp-dropdown");
 let tempDropDownSNATProtocol = document.getElementById("temp-dropdown-snat-protocol");
@@ -50,36 +55,34 @@ $(document).ready(function () {
 })
 
 function changeMenu(menu) {
-  if (menu === "dnat") {
-    //console.log("Clicked DNAT")
-    dnatButton.className = "btn btn-primary btn-lg";
-    snatButton.className = "btn btn-outline-primary btn-lg";
+  var sections = {
+    dashboard: { button: dashboardButton, view: dashboardView },
+    dnat: { button: dnatButton, view: dnatView },
+    snat: { button: snatButton, view: snatView },
+    backups: { button: backupsButton, view: backupsView },
+  };
 
-    try {
-      dnatTable.className = "table";
-      snatTable.className = "table d-none";
-    } catch (error) {
-      console.log(error);
-    }
-
-    bottomContainer.className = "container mt-3";
-    ruleType = "dnat";
-  } else if (menu === "snat") {
-    //console.log("Clicked SNAT")
-    snatButton.className = "btn btn-primary btn-lg";
-    dnatButton.className = "btn btn-outline-primary btn-lg";
-
-    try {
-      dnatTable.className = "table d-none";
-      snatTable.className = "table";
-    } catch (error) {
-      console.log(error);
-    }
-
-    bottomContainer.className = "container mt-3";
-    ruleType = "snat";
-  } else {
+  if (!sections[menu]) {
     console.log("Something went wrong!");
+    return;
+  }
+
+  for (let key of Object.keys(sections)) {
+    var section = sections[key];
+    if (!section.button || !section.view) {
+      continue;
+    }
+    if (key === menu) {
+      section.button.classList.add("is-active");
+      section.view.classList.remove("d-none");
+    } else {
+      section.button.classList.remove("is-active");
+      section.view.classList.add("d-none");
+    }
+  }
+
+  if (menu === "dnat" || menu === "snat") {
+    ruleType = menu;
   }
 }
 
@@ -357,8 +360,13 @@ function selectControl(options, selectedValue, extraClass) {
   return select;
 }
 
+function normalizeInterfaceValue(value) {
+  var selected = (value || "").trim();
+  return selected === "-" || selected === "No interfaces loaded" ? "" : selected;
+}
+
 function snatInterfaceControl(selectedValue) {
-  var selected = (selectedValue || "").trim();
+  var selected = normalizeInterfaceValue(selectedValue);
   var options = snatInterfaceOptions.slice();
   var selectedKnown = options.some(function (option) {
     return option.value === selected;
@@ -533,7 +541,7 @@ function setVnicStatus(message, isError) {
     return;
   }
   status.textContent = message;
-  status.className = isError ? "text-danger small" : "text-muted small";
+  status.className = isError ? "panel-status text-danger" : "panel-status";
 }
 
 function snatPoolPayloadFromForm() {
@@ -588,8 +596,8 @@ function renderVnicState(data) {
     var emptyRow = document.createElement("tr");
     var emptyCell = document.createElement("td");
     emptyCell.colSpan = 7;
-    emptyCell.className = "text-muted";
-    emptyCell.textContent = "Click Rescan VNICs after attaching or configuring secondary VNICs.";
+    emptyCell.className = "compact-empty";
+    emptyCell.textContent = "No VNIC IPs scanned.";
     emptyRow.appendChild(emptyCell);
     vnicList.appendChild(emptyRow);
     setVnicStatus("No VNIC scan loaded.", false);
@@ -666,12 +674,12 @@ function rescanVnics() {
 }
 
 function applySnatPool() {
-  setVnicStatus("Applying SNAT source pool...", false);
+  setVnicStatus("Applying Source NAT settings...", false);
   requestJson("/api/vnics/snat-pool", "POST", snatPoolPayloadFromForm())
     .then(function (data) {
       renderVnicState(data);
       renderNatTables(data.dnat_rules || {}, data.snat_rules || {});
-      setVnicStatus("SNAT source pool applied.", false);
+      setVnicStatus("Source NAT settings applied.", false);
       loadDashboardStats();
     })
     .catch(function (error) {
@@ -690,7 +698,7 @@ function setBackupStatus(message, isError) {
     return;
   }
   status.textContent = message;
-  status.className = isError ? "text-danger small" : "text-muted small";
+  status.className = isError ? "panel-status text-danger" : "panel-status";
 }
 
 function backupPolicyFromForm() {
