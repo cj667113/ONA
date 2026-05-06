@@ -16,9 +16,25 @@ let tempDropDownSNAT = document.getElementById("temp-dropdown-2");
 let dashboardPollTimer = null;
 let dashboardHistory = [];
 let dashboardRangeSeconds = 3600;
+let dashboardChartResizeTimer = null;
+let dashboardChartResizeListenerAttached = false;
 let snatInterfaceOptions = [];
+let submitToastTimer = null;
 
 console.log("V1.6.1 Loaded");
+
+function showSubmitSuccess(message) {
+  var toast = document.getElementById("submit-toast");
+  if (!toast) {
+    return;
+  }
+  toast.textContent = message || "Submit successful";
+  toast.classList.add("is-visible");
+  clearTimeout(submitToastTimer);
+  submitToastTimer = setTimeout(function () {
+    toast.classList.remove("is-visible");
+  }, 3000);
+}
 
 function updateDropDowns() {
   //console.log("Updating Dropdowns");
@@ -87,6 +103,9 @@ function changeMenu(menu) {
 
   if (menu === "dnat" || menu === "snat") {
     ruleType = menu;
+  }
+  if (menu === "dashboard") {
+    setTimeout(renderDashboardCharts, 0);
   }
 }
 
@@ -294,6 +313,7 @@ function sendJson() {
       } catch (error) {
         console.error(error);
       }
+      showSubmitSuccess();
       return;
     }
     let message = "Unable to submit NAT rules.";
@@ -523,9 +543,15 @@ function scannedInterfaceOptions(scan) {
     if (!item || !item.name) {
       continue;
     }
+    if (item.name === "lo") {
+      continue;
+    }
     addInterfaceOption(options, seen, item.name, item.addresses || []);
   }
   for (let ipInfo of scan.source_ips || []) {
+    if (ipInfo.interface === "lo") {
+      continue;
+    }
     addInterfaceOption(options, seen, ipInfo.interface, []);
   }
   return options;
@@ -688,9 +714,29 @@ function snatPoolPayloadFromForm() {
   });
   return {
     enabled: vnicElement("snat-pool-enabled").checked,
-    interface: vnicElement("snat-pool-interface").value,
     source_ips: selectedIps,
   };
+}
+
+function vnicConfigurationMessage(data, fallbackMessage) {
+  var configuration = data.configuration || {};
+  var results = configuration.results || [];
+  var errors = configuration.errors || [];
+  var configured = Number.isFinite(Number(configuration.configured_count))
+    ? Number(configuration.configured_count)
+    : results.filter(function (item) {
+      return item.status === "configured";
+    }).length;
+
+  if (errors.length) {
+    return configured
+      ? "Configured " + formatNumber(configured) + " address(es); " + formatNumber(errors.length) + " need attention."
+      : formatNumber(errors.length) + " address(es) still need attention.";
+  }
+  if (configured) {
+    return "Configured " + formatNumber(configured) + " address(es).";
+  }
+  return fallbackMessage;
 }
 
 function renderVnicState(data) {
@@ -699,21 +745,13 @@ function renderVnicState(data) {
   var capacity = data.capacity || {};
   var selectedIps = new Set(pool.source_ips || []);
   var sourceIps = scan.source_ips || [];
-  var interfaceSelect = vnicElement("snat-pool-interface");
   var vnicList = vnicElement("vnic-list");
 
   setSnatInterfaceOptions(scan);
 
-  if (!vnicList || !interfaceSelect) {
+  if (!vnicList) {
     return;
   }
-
-  populateInterfaceSelect(
-    interfaceSelect,
-    snatInterfaceOptions,
-    pool.interface || interfaceSelect.value,
-    "Select interface"
-  );
 
   vnicElement("snat-pool-enabled").checked = Boolean(pool.enabled);
   vnicElement("snat-pool-capacity").textContent = formatNumber(capacity.total_available_ports) +
@@ -741,7 +779,7 @@ function renderVnicState(data) {
     checkbox.className = "form-check-input snat-source-checkbox";
     checkbox.value = ipInfo.ip;
     checkbox.checked = selectedIps.has(ipInfo.ip);
-    checkbox.disabled = !ipInfo.configured;
+    checkbox.disabled = !ipInfo.interface;
     useCell.appendChild(checkbox);
     row.appendChild(useCell);
 
@@ -761,7 +799,7 @@ function renderVnicState(data) {
     row.appendChild(nicCell);
 
     var statusCell = document.createElement("td");
-    statusCell.textContent = ipInfo.configured ? "Configured" : "Needs OS config";
+    statusCell.textContent = ipInfo.configured ? "Ready" : (ipInfo.interface ? "Needs config" : "No OS interface");
     statusCell.className = ipInfo.configured ? "text-success" : "text-warning";
     row.appendChild(statusCell);
 
@@ -793,7 +831,29 @@ function loadVnicState() {
 function rescanVnics() {
   setVnicStatus("Scanning attached VNICs...", false);
   requestJson("/api/vnics/rescan", "POST", {})
-    .then(renderVnicState)
+    .then(function (data) {
+      renderVnicState(data);
+      showSubmitSuccess();
+    })
+    .catch(function (error) {
+      setVnicStatus(error.message, true);
+      alert(error.message);
+    });
+}
+
+function configureVnicSources() {
+  setVnicStatus("Scanning and configuring VNICs...", false);
+  requestJson("/api/vnics/configure", "POST", {})
+    .then(function (data) {
+      renderVnicState(data);
+      var message = vnicConfigurationMessage(data, "VNICs scanned. No OS changes needed.");
+      var hasErrors = Boolean(data.configuration && data.configuration.errors && data.configuration.errors.length);
+      setVnicStatus(message, hasErrors);
+      loadDashboardStats();
+      if (!hasErrors) {
+        showSubmitSuccess();
+      }
+    })
     .catch(function (error) {
       setVnicStatus(error.message, true);
       alert(error.message);
@@ -801,13 +861,18 @@ function rescanVnics() {
 }
 
 function applySnatPool() {
-  setVnicStatus("Applying Source NAT settings...", false);
+  setVnicStatus("Scanning, configuring, and applying SNAT pool...", false);
   requestJson("/api/vnics/snat-pool", "POST", snatPoolPayloadFromForm())
     .then(function (data) {
       renderVnicState(data);
       renderNatTables(data.dnat_rules || {}, data.snat_rules || {});
-      setVnicStatus("Source NAT settings applied.", false);
+      var configMessage = vnicConfigurationMessage(data, "");
+      var hasErrors = Boolean(data.configuration && data.configuration.errors && data.configuration.errors.length);
+      setVnicStatus(configMessage ? configMessage + " SNAT pool applied." : "SNAT pool applied.", hasErrors);
       loadDashboardStats();
+      if (!hasErrors) {
+        showSubmitSuccess();
+      }
     })
     .catch(function (error) {
       setVnicStatus(error.message, true);
@@ -855,7 +920,7 @@ function populateBackupPolicy(policy) {
   backupElement("backup-time").value = policy.time_utc || "00:00";
   backupElement("backup-weekday").value = policy.weekday || "0";
   backupElement("backup-retention").value = policy.retention || "30";
-  setBucketOptions([], policy.bucket || "");
+  selectBackupBucket(policy.bucket || "");
 }
 
 function setBucketOptions(buckets, selectedBucket) {
@@ -889,6 +954,33 @@ function setBucketOptions(buckets, selectedBucket) {
     selectedOption.selected = true;
     bucketSelect.appendChild(selectedOption);
   }
+}
+
+function selectBackupBucket(selectedBucket) {
+  var bucketSelect = backupElement("backup-bucket");
+  if (!bucketSelect) {
+    return;
+  }
+  if (!bucketSelect.options.length) {
+    setBucketOptions([], selectedBucket);
+    return;
+  }
+
+  var hasSelected = false;
+  for (let option of bucketSelect.options) {
+    if (option.value === selectedBucket) {
+      hasSelected = true;
+      break;
+    }
+  }
+
+  if (selectedBucket && !hasSelected) {
+    var selectedOption = document.createElement("option");
+    selectedOption.value = selectedBucket;
+    selectedOption.textContent = selectedBucket;
+    bucketSelect.appendChild(selectedOption);
+  }
+  bucketSelect.value = selectedBucket || "";
 }
 
 function renderBackupList(backups) {
@@ -927,6 +1019,9 @@ function renderBackupList(backups) {
 
     var actionCell = document.createElement("td");
     actionCell.className = "text-end";
+    var actions = document.createElement("div");
+    actions.className = "backup-actions";
+
     var restoreButton = document.createElement("button");
     restoreButton.type = "button";
     restoreButton.className = "btn btn-outline-primary btn-sm";
@@ -934,7 +1029,18 @@ function renderBackupList(backups) {
     restoreButton.addEventListener("click", function () {
       restoreBackup(backup.name);
     });
-    actionCell.appendChild(restoreButton);
+    actions.appendChild(restoreButton);
+
+    var deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "btn btn-outline-danger btn-sm";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", function () {
+      deleteBackup(backup.name);
+    });
+    actions.appendChild(deleteButton);
+
+    actionCell.appendChild(actions);
     row.appendChild(actionCell);
 
     backupList.appendChild(row);
@@ -963,17 +1069,22 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
-function loadBackupState() {
+function loadBackupState(options) {
   if (!backupElement("backup-panel")) {
-    return;
+    return Promise.resolve();
   }
-  setBackupStatus("Loading backup status...", false);
-  requestJson("/api/backups/status", "GET")
+  options = options || {};
+  setBackupStatus(options.loadingMessage || "Loading backup status...", false);
+  return requestJson("/api/backups/status", "GET")
     .then(function (data) {
-      populateBackupPolicy(data.policy || {});
+      if (!options.preservePolicy) {
+        populateBackupPolicy(data.policy || {});
+      }
       renderBackupList(data.backups || []);
       if (data.error) {
         setBackupStatus(data.error, true);
+      } else if (options.successMessage) {
+        setBackupStatus(options.successMessage, false);
       } else if (data.policy && data.policy.last_backup_error) {
         setBackupStatus("Last backup failed: " + data.policy.last_backup_error, true);
       } else if (data.policy && data.policy.last_backup_at) {
@@ -1011,12 +1122,19 @@ function refreshBuckets() {
 }
 
 function saveBackupPolicy() {
+  var policy = backupPolicyFromForm();
   setBackupStatus("Saving backup policy...", false);
-  requestJson("/api/backups/policy", "POST", backupPolicyFromForm())
+  requestJson("/api/backups/policy", "POST", policy)
     .then(function (data) {
-      populateBackupPolicy(data.policy || {});
-      setBackupStatus("Backup policy saved.", false);
-      loadBackupState();
+      populateBackupPolicy(Object.assign({}, data.policy || {}, policy));
+      return loadBackupState({
+        preservePolicy: true,
+        loadingMessage: "Refreshing backups...",
+        successMessage: "Backup policy saved.",
+      });
+    })
+    .then(function () {
+      showSubmitSuccess();
     })
     .catch(function (error) {
       setBackupStatus(error.message, true);
@@ -1025,16 +1143,23 @@ function saveBackupPolicy() {
 }
 
 function runBackupNow() {
+  var policy = backupPolicyFromForm();
   setBackupStatus("Saving backup policy...", false);
-  requestJson("/api/backups/policy", "POST", backupPolicyFromForm())
+  requestJson("/api/backups/policy", "POST", policy)
     .then(function (data) {
-      populateBackupPolicy(data.policy || {});
+      populateBackupPolicy(Object.assign({}, data.policy || {}, policy));
       setBackupStatus("Creating backup...", false);
       return requestJson("/api/backups/run", "POST", {});
     })
     .then(function (data) {
-      setBackupStatus("Backup created: " + data.backup.object_name, false);
-      loadBackupState();
+      return loadBackupState({
+        preservePolicy: true,
+        loadingMessage: "Refreshing backups...",
+        successMessage: "Backup created: " + data.backup.object_name,
+      });
+    })
+    .then(function () {
+      showSubmitSuccess();
     })
     .catch(function (error) {
       setBackupStatus(error.message, true);
@@ -1051,6 +1176,29 @@ function restoreBackup(objectName) {
     .then(function (data) {
       renderNatTables(data.dnat_rules || {}, data.snat_rules || {});
       setBackupStatus("Backup restored.", false);
+      showSubmitSuccess();
+    })
+    .catch(function (error) {
+      setBackupStatus(error.message, true);
+      alert(error.message);
+    });
+}
+
+function deleteBackup(objectName) {
+  if (!confirm("Delete this backup object from Object Storage?")) {
+    return;
+  }
+  setBackupStatus("Deleting backup...", false);
+  requestJson("/api/backups/delete", "POST", { object_name: objectName })
+    .then(function () {
+      return loadBackupState({
+        preservePolicy: true,
+        loadingMessage: "Refreshing backups...",
+        successMessage: "Backup deleted.",
+      });
+    })
+    .then(function () {
+      showSubmitSuccess();
     })
     .catch(function (error) {
       setBackupStatus(error.message, true);
@@ -1095,6 +1243,47 @@ function formatRatePackets(value) {
   return Number(value || 0).toFixed(1) + " pkt/s";
 }
 
+function formatPercentTick(value) {
+  return Math.round(Number(value || 0)) + "%";
+}
+
+function formatCompactNumber(value) {
+  var numberValue = Number(value || 0);
+  var absoluteValue = Math.abs(numberValue);
+  if (absoluteValue >= 1000000000) {
+    return (numberValue / 1000000000).toFixed(1).replace(/\.0$/, "") + "B";
+  }
+  if (absoluteValue >= 1000000) {
+    return (numberValue / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+  }
+  if (absoluteValue >= 1000) {
+    return (numberValue / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+  }
+  if (absoluteValue >= 10 || Number.isInteger(numberValue)) {
+    return Math.round(numberValue).toLocaleString();
+  }
+  return numberValue.toFixed(1);
+}
+
+function formatByteRateTick(value) {
+  var bytes = Number(value || 0);
+  if (bytes < 1024) {
+    return Math.round(bytes) + " B/s";
+  }
+  if (bytes < 1024 * 1024) {
+    return Math.round(bytes / 1024) + " KB/s";
+  }
+  return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0).replace(/\.0$/, "") + " MB/s";
+}
+
+function formatPacketRateTick(value) {
+  var packets = Number(value || 0);
+  if (Math.abs(packets) >= 1000) {
+    return (packets / 1000).toFixed(1).replace(/\.0$/, "") + "K pkt/s";
+  }
+  return Math.round(packets) + " pkt/s";
+}
+
 function numberOrNull(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -1108,6 +1297,7 @@ var dashboardChartDefinitions = [
     id: "cpu",
     yLabel: "CPU %",
     format: formatPercent,
+    tickFormat: formatPercentTick,
     min: 0,
     max: 100,
     value: function (sample) {
@@ -1118,6 +1308,7 @@ var dashboardChartDefinitions = [
     id: "memory",
     yLabel: "Memory %",
     format: formatPercent,
+    tickFormat: formatPercentTick,
     min: 0,
     max: 100,
     value: function (sample) {
@@ -1128,6 +1319,7 @@ var dashboardChartDefinitions = [
     id: "ports",
     yLabel: "Ports used",
     format: formatNumber,
+    tickFormat: formatCompactNumber,
     value: function (sample) {
       return numberOrNull(sample.nat && sample.nat.ports_in_use);
     },
@@ -1136,6 +1328,7 @@ var dashboardChartDefinitions = [
     id: "connections",
     yLabel: "Connections",
     format: formatNumber,
+    tickFormat: formatCompactNumber,
     value: function (sample) {
       return numberOrNull(sample.nat && sample.nat.total_connections);
     },
@@ -1144,6 +1337,7 @@ var dashboardChartDefinitions = [
     id: "network",
     yLabel: "Bytes/s",
     format: formatRateBytes,
+    tickFormat: formatByteRateTick,
     value: function (sample) {
       var rates = sample.network && sample.network.rates;
       return numberOrNull(rates && rates.total_bytes_per_second);
@@ -1153,6 +1347,7 @@ var dashboardChartDefinitions = [
     id: "packets",
     yLabel: "Packets/s",
     format: formatRatePackets,
+    tickFormat: formatPacketRateTick,
     value: function (sample) {
       var rates = sample.network && sample.network.rates;
       return numberOrNull(rates && rates.total_packets_per_second);
@@ -1212,6 +1407,13 @@ function setupDashboardCharts() {
     dashboardRangeSeconds = Number(rangeSelect.value || 3600);
     loadDashboardHistory();
   });
+  if (!dashboardChartResizeListenerAttached) {
+    window.addEventListener("resize", function () {
+      clearTimeout(dashboardChartResizeTimer);
+      dashboardChartResizeTimer = setTimeout(renderDashboardCharts, 150);
+    });
+    dashboardChartResizeListenerAttached = true;
+  }
 }
 
 function loadDashboardHistory() {
@@ -1238,18 +1440,88 @@ function svgNode(tag, attrs) {
 }
 
 function formatChartTime(epoch) {
-  return new Date(epoch * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  var date = new Date(epoch * 1000);
+  if (dashboardRangeSeconds >= 86400) {
+    return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric" });
+  }
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function chartScale(maxValue, fixedMax) {
-  if (fixedMax !== undefined) {
-    return fixedMax;
-  }
-  if (!maxValue || maxValue <= 0) {
+function niceChartNumber(value, round) {
+  if (!value || value <= 0) {
     return 1;
   }
-  var magnitude = Math.pow(10, Math.floor(Math.log10(maxValue)));
-  return Math.ceil(maxValue / magnitude) * magnitude;
+  var exponent = Math.floor(Math.log10(value));
+  var fraction = value / Math.pow(10, exponent);
+  var niceFraction;
+  if (round) {
+    if (fraction < 1.5) {
+      niceFraction = 1;
+    } else if (fraction < 3) {
+      niceFraction = 2;
+    } else if (fraction < 7) {
+      niceFraction = 5;
+    } else {
+      niceFraction = 10;
+    }
+  } else if (fraction <= 1) {
+    niceFraction = 1;
+  } else if (fraction <= 2) {
+    niceFraction = 2;
+  } else if (fraction <= 5) {
+    niceFraction = 5;
+  } else {
+    niceFraction = 10;
+  }
+  return niceFraction * Math.pow(10, exponent);
+}
+
+function chartTicks(yMin, observedMax, fixedMax) {
+  if (fixedMax !== undefined) {
+    var fixedStep = (fixedMax - yMin) / 4;
+    return [yMin, yMin + fixedStep, yMin + fixedStep * 2, yMin + fixedStep * 3, fixedMax];
+  }
+
+  var maxValue = Math.max(observedMax, yMin + 1);
+  var step = niceChartNumber((maxValue - yMin) / 4, true);
+  var yMax = Math.ceil(maxValue / step) * step;
+  var ticks = [];
+  for (let value = yMin; value <= yMax + step / 2; value += step) {
+    ticks.push(value);
+  }
+  if (ticks.length < 2) {
+    ticks.push(yMin + step);
+  }
+  return ticks;
+}
+
+function chartXTickEpochs(xMin, xMax) {
+  return [xMin, xMin + (xMax - xMin) / 2, xMax];
+}
+
+function chartLeftMargin(labels, width) {
+  var maxLength = labels.reduce(function (longest, label) {
+    return Math.max(longest, String(label).length);
+  }, 0);
+  var margin = maxLength * 7 + 44;
+  var maxMargin = width < 520 ? 106 : 136;
+  return Math.max(86, Math.min(maxMargin, margin));
+}
+
+function appendChartText(svg, attrs, text) {
+  var node = svgNode("text", attrs);
+  node.textContent = text;
+  svg.appendChild(node);
+  return node;
+}
+
+function chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight) {
+  var x = left + ((point.epoch - xMin) / (xMax - xMin)) * plotWidth;
+  var y = top + plotHeight - ((point.value - yMin) / (yMax - yMin)) * plotHeight;
+  return {
+    x: Math.max(left, Math.min(left + plotWidth, x)),
+    y: Math.max(top, Math.min(top + plotHeight, y)),
+  };
 }
 
 function renderMetricChart(definition, samples) {
@@ -1258,14 +1530,9 @@ function renderMetricChart(definition, samples) {
     return;
   }
 
-  var width = 420;
-  var height = 230;
-  var left = 58;
-  var right = 16;
-  var top = 18;
-  var bottom = 46;
-  var plotWidth = width - left - right;
-  var plotHeight = height - top - bottom;
+  var bounds = svg.getBoundingClientRect();
+  var width = Math.max(360, Math.round(bounds.width || svg.clientWidth || 640));
+  var height = Math.max(250, Math.round(bounds.height || svg.clientHeight || 270));
   var now = Date.now() / 1000;
   var xMin = now - dashboardRangeSeconds;
   var xMax = now;
@@ -1278,58 +1545,66 @@ function renderMetricChart(definition, samples) {
   var observedMax = values.reduce(function (maxValue, point) {
     return Math.max(maxValue, point.value);
   }, yMin);
-  var yMax = chartScale(observedMax, definition.max);
+  var ticks = chartTicks(yMin, observedMax, definition.max);
+  var tickFormatter = definition.tickFormat || definition.format;
+  var tickLabels = ticks.map(function (tickValue) {
+    return tickFormatter(tickValue);
+  });
+  var left = chartLeftMargin(tickLabels, width);
+  var right = width < 520 ? 20 : 30;
+  var top = 18;
+  var bottom = 58;
+  var plotWidth = Math.max(120, width - left - right);
+  var plotHeight = Math.max(120, height - top - bottom);
+  var yMax = ticks[ticks.length - 1];
   if (yMax <= yMin) {
     yMax = yMin + 1;
   }
 
   svg.replaceChildren();
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
 
-  for (let index = 0; index <= 3; index++) {
-    var ratio = index / 3;
+  for (let index = 0; index < ticks.length; index++) {
+    var tickValue = ticks[index];
+    var ratio = (tickValue - yMin) / (yMax - yMin);
     var y = top + plotHeight - ratio * plotHeight;
-    var tickValue = yMin + ratio * (yMax - yMin);
     svg.appendChild(svgNode("line", { x1: left, y1: y, x2: width - right, y2: y, class: "chart-grid-line" }));
-    var tick = svgNode("text", { x: left - 8, y: y + 4, "text-anchor": "end", class: "chart-axis-text" });
-    tick.textContent = definition.format(tickValue);
-    svg.appendChild(tick);
+    appendChartText(svg, { x: left - 12, y: y + 4, "text-anchor": "end", class: "chart-axis-text" }, tickLabels[index]);
   }
 
   svg.appendChild(svgNode("line", { x1: left, y1: top, x2: left, y2: height - bottom, class: "chart-axis" }));
   svg.appendChild(svgNode("line", { x1: left, y1: height - bottom, x2: width - right, y2: height - bottom, class: "chart-axis" }));
 
-  var startLabel = svgNode("text", { x: left, y: height - 24, "text-anchor": "middle", class: "chart-axis-text" });
-  startLabel.textContent = formatChartTime(xMin);
-  svg.appendChild(startLabel);
-  var endLabel = svgNode("text", { x: width - right, y: height - 24, "text-anchor": "middle", class: "chart-axis-text" });
-  endLabel.textContent = formatChartTime(xMax);
-  svg.appendChild(endLabel);
+  var xTicks = chartXTickEpochs(xMin, xMax);
+  for (let index = 0; index < xTicks.length; index++) {
+    var epoch = xTicks[index];
+    var x = left + ((epoch - xMin) / (xMax - xMin)) * plotWidth;
+    if (index === 1) {
+      svg.appendChild(svgNode("line", { x1: x, y1: top, x2: x, y2: height - bottom, class: "chart-grid-line" }));
+    }
+    var anchor = index === 0 ? "start" : index === xTicks.length - 1 ? "end" : "middle";
+    appendChartText(svg, { x: x, y: height - 30, "text-anchor": anchor, class: "chart-axis-text" }, formatChartTime(epoch));
+  }
 
-  var xLabel = svgNode("text", { x: left + plotWidth / 2, y: height - 6, "text-anchor": "middle", class: "chart-axis-label" });
-  xLabel.textContent = "Time";
-  svg.appendChild(xLabel);
-  var yLabel = svgNode("text", {
-    x: 14,
+  appendChartText(svg, { x: left + plotWidth / 2, y: height - 8, "text-anchor": "middle", class: "chart-axis-label" }, "Time");
+  var yLabelX = width < 520 ? 16 : 18;
+  appendChartText(svg, {
+    x: yLabelX,
     y: top + plotHeight / 2,
     "text-anchor": "middle",
-    transform: "rotate(-90 14 " + (top + plotHeight / 2) + ")",
+    transform: "rotate(-90 " + yLabelX + " " + (top + plotHeight / 2) + ")",
     class: "chart-axis-label",
-  });
-  yLabel.textContent = definition.yLabel;
-  svg.appendChild(yLabel);
+  }, definition.yLabel);
 
   if (values.length < 2) {
-    var empty = svgNode("text", { x: left + plotWidth / 2, y: top + plotHeight / 2, "text-anchor": "middle", class: "chart-empty" });
-    empty.textContent = "Collecting data";
-    svg.appendChild(empty);
+    appendChartText(svg, { x: left + plotWidth / 2, y: top + plotHeight / 2, "text-anchor": "middle", class: "chart-empty" }, "Collecting data");
     return;
   }
 
   var points = values.map(function (point) {
-    var x = left + ((point.epoch - xMin) / (xMax - xMin)) * plotWidth;
-    var y = top + plotHeight - ((point.value - yMin) / (yMax - yMin)) * plotHeight;
-    return x.toFixed(1) + "," + y.toFixed(1);
+    var coordinates = chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
+    return coordinates.x.toFixed(1) + "," + coordinates.y.toFixed(1);
   }).join(" ");
   svg.appendChild(svgNode("polyline", { points: points, class: "chart-line" }));
 }

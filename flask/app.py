@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import threading
@@ -906,6 +907,22 @@ def restore_backup_object(object_name):
     }
 
 
+def delete_backup_object(object_name):
+    policy = backup_policy()
+    if not policy["bucket"]:
+        raise RuleValidationError("Select a backup bucket before deleting backups.")
+    if not backup_object_allowed(object_name, policy):
+        raise RuleValidationError("Backup object is outside the configured backup prefix.")
+
+    client = oci_client()
+    namespace = object_storage_namespace(client, policy)
+    client.delete_object(namespace, policy["bucket"], object_name)
+    return {
+        "object_name": object_name,
+        "deleted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+
 def scheduled_backup_key(policy, now):
     if not policy["enabled"] or policy["schedule"] == "manual":
         return None
@@ -1111,14 +1128,18 @@ def normalize_vnic_scan(metadata_vnics, interfaces):
     }
 
 
-def scan_vnics():
-    scan = normalize_vnic_scan(fetch_vnics_from_metadata(), local_interfaces())
+def save_vnic_scan(scan):
     save_file_config(
         {
             "ONA_VNIC_SCAN_JSON": json.dumps(scan),
             "ONA_VNIC_SCAN_AT": scan["scanned_at"],
         }
     )
+
+
+def scan_vnics():
+    scan = normalize_vnic_scan(fetch_vnics_from_metadata(), local_interfaces())
+    save_vnic_scan(scan)
     return scan
 
 
@@ -1136,6 +1157,175 @@ def vnic_scan_state():
     elif not scan.get("interfaces"):
         scan["interfaces"] = list(local_interfaces().values())
     return scan
+
+
+def run_ip(args, check=True):
+    try:
+        completed = subprocess.run(
+            ["ip", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"Unable to run ip {' '.join(args)}: {exc}") from exc
+    if check and completed.returncode != 0:
+        message = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"ip {' '.join(args)} failed: {message}")
+    return completed
+
+
+def vnic_ipv4_addresses(vnic):
+    primary_ip = str(vnic.get("privateIp") or "")
+    secondary_ips = [
+        str(ip)
+        for ip in vnic.get("secondaryPrivateIps", [])
+        if ip
+    ]
+    addresses = []
+    for ip in [primary_ip, *secondary_ips]:
+        try:
+            ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        addresses.append(ip)
+    return addresses
+
+
+def vnic_prefix_for_ip(vnic, ip):
+    address = ipaddress.IPv4Address(ip)
+    cidrs = []
+    if vnic.get("subnetCidrBlock"):
+        cidrs.append(vnic["subnetCidrBlock"])
+    cidrs.extend(vnic.get("subnetCidrBlocks") or [])
+    cidrs.extend(vnic.get("secondaryPrivateIpCidrs") or [])
+
+    for cidr in cidrs:
+        try:
+            network = ipaddress.ip_network(str(cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4 and address in network:
+            return network.prefixlen
+    return 32
+
+
+def configure_vnics_with_ip(metadata_vnics, interfaces):
+    interfaces_by_mac = {
+        data["mac"].lower(): data
+        for data in interfaces.values()
+        if data.get("mac")
+    }
+    configured_addresses = {
+        address
+        for interface in interfaces.values()
+        for address in interface.get("addresses", [])
+    }
+    results = []
+    errors = []
+
+    for index, vnic in enumerate(metadata_vnics):
+        mac_addr = str(vnic.get("macAddr", "")).lower()
+        interface = interfaces_by_mac.get(mac_addr)
+        interface_name = interface["name"] if interface else ""
+        for ip in vnic_ipv4_addresses(vnic):
+            item = {
+                "ip": ip,
+                "vnic_id": vnic.get("vnicId", ""),
+                "interface": interface_name,
+                "nic_index": vnic.get("nicIndex", index),
+            }
+            if ip in configured_addresses:
+                item["status"] = "already_configured"
+                results.append(item)
+                continue
+            if not interface_name:
+                item["status"] = "error"
+                item["message"] = "No matching OS interface was found for this VNIC MAC address."
+                errors.append(item)
+                results.append(item)
+                continue
+
+            prefix = vnic_prefix_for_ip(vnic, ip)
+            item["cidr"] = f"{ip}/{prefix}"
+            try:
+                run_ip(["link", "set", "dev", interface_name, "up"])
+                add_result = run_ip(["addr", "add", item["cidr"], "dev", interface_name], check=False)
+                if add_result.returncode != 0 and "File exists" not in add_result.stderr:
+                    message = add_result.stderr.strip() or add_result.stdout.strip()
+                    raise RuntimeError(message or "address add failed")
+                item["status"] = "configured"
+                configured_addresses.add(ip)
+            except RuntimeError as exc:
+                item["status"] = "error"
+                item["message"] = str(exc)
+                errors.append(item)
+            results.append(item)
+
+    return {"method": "ip", "results": results, "errors": errors}
+
+
+def run_oci_network_configure():
+    if not shutil.which("oci-network-config"):
+        return None
+
+    completed = subprocess.run(
+        ["oci-network-config", "configure"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return {
+            "method": "oci-network-config",
+            "results": [],
+            "errors": [
+                {
+                    "status": "error",
+                    "message": completed.stderr.strip() or completed.stdout.strip() or "oci-network-config configure failed",
+                }
+            ],
+        }
+    return {
+        "method": "oci-network-config",
+        "results": [
+            {
+                "status": "configured",
+                "message": completed.stdout.strip() or "Configured",
+            }
+        ],
+        "errors": [],
+    }
+
+
+def configure_vnic_interfaces():
+    metadata_vnics = fetch_vnics_from_metadata()
+    before_scan = normalize_vnic_scan(metadata_vnics, local_interfaces())
+    save_vnic_scan(before_scan)
+
+    configuration = run_oci_network_configure()
+    if configuration is None or configuration.get("errors"):
+        fallback = configure_vnics_with_ip(metadata_vnics, local_interfaces())
+        if configuration and configuration.get("errors"):
+            fallback["previous_method"] = configuration["method"]
+            fallback["previous_errors"] = configuration["errors"]
+        configuration = fallback
+
+    after_scan = normalize_vnic_scan(metadata_vnics, local_interfaces())
+    before_unconfigured = {
+        item["ip"]
+        for item in before_scan.get("source_ips", [])
+        if not item.get("configured")
+    }
+    newly_configured = [
+        item["ip"]
+        for item in after_scan.get("source_ips", [])
+        if item.get("configured") and item["ip"] in before_unconfigured
+    ]
+    configuration["configured_count"] = len(newly_configured)
+    configuration["configured_ips"] = newly_configured
+    save_vnic_scan(after_scan)
+    return {"scan": after_scan, "configuration": configuration}
 
 
 def snat_pool_policy():
@@ -1163,7 +1353,6 @@ def validate_snat_pool_payload(payload):
     source_ips = [parse_ip(ip, "SNAT source IP") for ip in source_ips]
     source_ips = list(dict.fromkeys(source_ips))
 
-    interface = parse_interface(payload.get("interface", "")) if payload.get("interface") else ""
     scan = vnic_scan_state()
     scanned_ips = {entry["ip"]: entry for entry in scan.get("source_ips", [])}
     unknown_ips = [ip for ip in source_ips if ip not in scanned_ips]
@@ -1175,20 +1364,43 @@ def validate_snat_pool_payload(payload):
     if enabled and not source_ips:
         raise RuleValidationError("Enable the SNAT pool only after selecting at least one source IP.")
 
-    if not interface and source_ips:
-        interface = scanned_ips[source_ips[0]].get("interface", "")
+    source_entries = [
+        {
+            "ip": ip,
+            "interface": scanned_ips[ip].get("interface", ""),
+        }
+        for ip in source_ips
+    ]
+    missing_interfaces = [entry["ip"] for entry in source_entries if not entry["interface"]]
+    if missing_interfaces:
+        raise RuleValidationError("Selected SNAT source IPs must have an OS interface.")
+
+    interface = parse_interface(payload.get("interface", "")) if payload.get("interface") else ""
+    if not interface and source_entries:
+        interface = source_entries[0]["interface"]
     if enabled and not interface:
         raise RuleValidationError("An output interface is required for the SNAT pool.")
 
-    return {"enabled": enabled, "source_ips": source_ips, "interface": interface}
+    return {
+        "enabled": enabled,
+        "source_ips": source_ips,
+        "interface": interface,
+        "sources": source_entries,
+    }
 
 
-def snat_pool_commands(source_ips, output_interface, chain):
+def snat_pool_commands(pool, chain):
     commands = []
-    remaining = len(source_ips)
-    for index, source_ip in enumerate(source_ips):
-        command = ["-t", "nat", "-A", chain, "-p", "all", "-o", output_interface]
-        if index < len(source_ips) - 1:
+    sources = pool.get("sources") or [
+        {"ip": source_ip, "interface": pool.get("interface", "")}
+        for source_ip in pool["source_ips"]
+    ]
+    remaining = len(sources)
+    for index, source in enumerate(sources):
+        command = ["-t", "nat", "-A", chain, "-p", "all"]
+        if source.get("interface"):
+            command.extend(["-o", source["interface"]])
+        if index < len(sources) - 1:
             probability = 1 / remaining
             command.extend(
                 [
@@ -1200,7 +1412,7 @@ def snat_pool_commands(source_ips, output_interface, chain):
                     f"{probability:.8f}",
                 ]
             )
-        command.extend(["-j", "SNAT", "--to-source", source_ip])
+        command.extend(["-j", "SNAT", "--to-source", source["ip"]])
         commands.append(command)
         remaining -= 1
     return commands
@@ -1223,13 +1435,13 @@ def apply_snat_pool(pool):
     delete_chain_if_exists(temp_chain)
     run_iptables(["-t", "nat", "-N", temp_chain])
     try:
-        for command in snat_pool_commands(pool["source_ips"], pool["interface"], temp_chain):
+        for command in snat_pool_commands(pool, temp_chain):
             run_iptables(command)
     finally:
         delete_chain_if_exists(temp_chain)
 
     run_iptables(["-t", "nat", "-F", MANAGED_SNAT_CHAIN])
-    for command in snat_pool_commands(pool["source_ips"], pool["interface"], MANAGED_SNAT_CHAIN):
+    for command in snat_pool_commands(pool, MANAGED_SNAT_CHAIN):
         run_iptables(command)
 
     save_file_config(
@@ -1761,6 +1973,27 @@ def api_vnics_rescan(current_user):
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/vnics/configure", methods=["POST"])
+@token_required
+def api_vnics_configure(current_user):
+    try:
+        require_csrf_token()
+        result = configure_vnic_interfaces()
+        return jsonify(
+            {
+                "scan": result["scan"],
+                "configuration": result["configuration"],
+                "snat_pool": snat_pool_policy(),
+                "capacity": estimated_snat_capacity(),
+            }
+        )
+    except VnicScanError as exc:
+        return jsonify({"error": str(exc)}), 502
+    except RuntimeError as exc:
+        app.logger.exception("VNIC configuration failed")
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/vnics/snat-pool", methods=["POST"])
 @token_required
 def api_vnics_snat_pool(current_user):
@@ -1769,12 +2002,14 @@ def api_vnics_snat_pool(current_user):
         data = request.get_json(silent=True)
         if data is None:
             raise RuleValidationError("Expected JSON request body.")
+        configuration = configure_vnic_interfaces()
         pool = validate_snat_pool_payload(data)
         apply_snat_pool(pool)
         nat_rules = process_nat_rules(get_nat_rules())
         return jsonify(
             {
                 "scan": vnic_scan_state(),
+                "configuration": configuration["configuration"],
                 "snat_pool": snat_pool_policy(),
                 "capacity": estimated_snat_capacity(),
                 "dnat_rules": nat_rules[0],
@@ -1783,6 +2018,8 @@ def api_vnics_snat_pool(current_user):
         )
     except RuleValidationError as exc:
         return jsonify({"error": str(exc)}), 400
+    except VnicScanError as exc:
+        return jsonify({"error": str(exc)}), 502
     except RuntimeError as exc:
         app.logger.exception("SNAT pool update failed")
         return jsonify({"error": str(exc)}), 500
@@ -1833,7 +2070,7 @@ def api_save_backup_policy(current_user):
             raise RuleValidationError("Expected JSON request body.")
         updates = validate_backup_policy_payload(data)
         save_file_config(updates)
-        return jsonify({"policy": public_backup_policy(backup_policy()), "message": "Backup policy saved."})
+        return jsonify({"policy": public_backup_policy(backup_policy(updates)), "message": "Backup policy saved."})
     except RuleValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -1870,6 +2107,22 @@ def api_restore_backup(current_user):
                 "snat_rules": nat_rules[1],
             }
         )
+    except RuleValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except BackupError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        return backup_api_exception_response(exc)
+
+
+@app.route("/api/backups/delete", methods=["POST"])
+@token_required
+def api_delete_backup(current_user):
+    try:
+        require_csrf_token()
+        data = request.get_json(silent=True) or {}
+        object_name = data.get("object_name", "")
+        return jsonify({"delete": delete_backup_object(object_name)})
     except RuleValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     except BackupError as exc:

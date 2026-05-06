@@ -78,9 +78,9 @@ In the UI, enter the region, compartment OCID, optional namespace, refresh bucke
 The gateway dashboard streams updates in place about every 30 seconds with CPU, memory, conntrack, NAT port, connection, packet, and network throughput statistics.
 
 ## Step 8: Optional Secondary VNIC SNAT Pool
-ONA can scan the instance metadata service for attached VNICs and their primary or secondary private IPs. After adding or configuring secondary VNICs on the instance, use `Rescan VNICs` in the UI, select the configured private IPs, choose the output interface, and apply the SNAT source pool.
+ONA can scan the instance metadata service for attached VNICs and their primary or secondary private IPs. After attaching secondary VNICs or adding secondary private IPs in OCI, use `Scan & Configure` in the Source NAT tab. ONA scans IMDS, configures missing live OS addresses with `oci-network-config configure` when available or `ip addr add` as a fallback, and refreshes the source address list. Select the addresses to use, enable the SNAT pool, and click `Apply SNAT Pool`.
 
-For NAT forwarding, disable source/destination check on every VNIC used by the appliance. Secondary VNICs must also be configured in the operating system before ONA can safely use their IPs as SNAT sources.
+For NAT forwarding, disable source/destination check on every VNIC used by the appliance. Oracle recommends `oci-network-config` for Oracle Linux secondary VNIC OS configuration; ONA falls back to live `ip` commands when that utility is not present.
 
 ## Step 9: Access the UI
 In a web browser go to `$ADDRESS`.

@@ -179,19 +179,15 @@
           <div class="panel-status" id="vnic-status">No VNIC scan loaded.</div>
         </div>
         <div class="panel-actions">
-          <button class="btn btn-outline-primary btn-sm" type="button" onclick="rescanVnics()">Rescan VNICs</button>
-          <button class="btn btn-primary btn-sm" type="button" onclick="applySnatPool()">Apply Sources</button>
+          <button class="btn btn-primary btn-sm" type="button" onclick="configureVnicSources()">Scan & Configure</button>
+          <button class="btn btn-outline-primary btn-sm" type="button" onclick="applySnatPool()">Apply SNAT Pool</button>
         </div>
       </div>
 
       <div class="source-controls-grid">
-        <div>
-          <label for="snat-pool-interface" class="form-label">Output interface</label>
-          <select id="snat-pool-interface" class="form-select form-select-sm"></select>
-        </div>
         <div class="form-check mb-2">
           <input id="snat-pool-enabled" class="form-check-input" type="checkbox">
-          <label for="snat-pool-enabled" class="form-check-label">Use selected IPs</label>
+          <label for="snat-pool-enabled" class="form-check-label">Enable SNAT pool</label>
         </div>
         <div>
           <div class="metric-label">Estimated source ports</div>
@@ -359,7 +355,7 @@
           <th>Backup object</th>
           <th class="text-end">Size</th>
           <th>Created</th>
-          <th class="text-end">Action</th>
+          <th class="text-end">Actions</th>
         </tr>
       </thead>
       <tbody id="backup-list">

@@ -136,6 +136,31 @@
       flex-wrap: wrap;
     }
 
+    .submit-toast {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      z-index: 1080;
+      min-width: min(460px, calc(100vw - 32px));
+      padding: 14px 22px;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      background: #ecfdf5;
+      color: #047857;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+      font-weight: 700;
+      text-align: center;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, -18px);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+
+    .submit-toast.is-visible {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
     #backup-panel .form-label,
     #vnic-panel .form-label,
     #stats-panel .form-label {
@@ -147,6 +172,13 @@
     #backup-list td:first-child,
     #vnic-list td:nth-child(3) {
       max-width: 280px;
+    }
+
+    .backup-actions {
+      display: inline-flex;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-wrap: wrap;
     }
 
     .metric-grid {
@@ -215,32 +247,34 @@
     .chart-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+      gap: 14px;
     }
 
     .chart-card {
       border: 1px solid var(--ona-border-soft);
       border-radius: 8px;
-      padding: 14px;
+      padding: 16px 18px 14px;
       background: #ffffff;
+      min-width: 0;
     }
 
     .chart-title {
       font-size: 0.88rem;
       font-weight: 700;
       color: #334155;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
 
     .metric-chart {
       display: block;
       width: 100%;
-      height: 230px;
+      height: 270px;
+      overflow: visible;
     }
 
     .chart-axis,
     .chart-grid-line {
-      stroke: #dbe3ed;
+      stroke: #d8e2ee;
       stroke-width: 1;
     }
 
@@ -251,14 +285,15 @@
     .chart-line {
       fill: none;
       stroke: var(--ona-primary);
-      stroke-width: 2.5;
+      stroke-width: 2.75;
       stroke-linejoin: round;
       stroke-linecap: round;
     }
 
     .chart-axis-text {
       fill: var(--ona-muted);
-      font-size: 11px;
+      font-size: 12px;
+      font-weight: 500;
     }
 
     .chart-axis-label {
@@ -374,7 +409,7 @@
 
     .source-controls-grid {
       display: grid;
-      grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 0.8fr) minmax(200px, 1fr);
+      grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr);
       gap: 12px;
       align-items: end;
       margin-bottom: 12px;
@@ -474,6 +509,7 @@
 
 <body>
   <script type="text/javascript" src="{{url_for('static', filename='app.js')}}" defer></script>
+  <div id="submit-toast" class="submit-toast" role="status" aria-live="polite" aria-atomic="true">Submit successful</div>
   <div class="d-none">
     <div id="temp-delete-btn"><button onclick="deleteRule(this)" class="btn btn-outline-danger btn-sm">X</button></div>
     <select id="temp-dropdown" name="dropdown" value="tcp" class="select">
