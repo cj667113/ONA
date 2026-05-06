@@ -60,6 +60,44 @@
       <div class="metric-subtext" id="metric-rule-counts">DNAT - / SNAT -</div>
     </div>
   </div>
+
+  <div class="chart-toolbar">
+    <h3 class="panel-title">Metric Trends</h3>
+    <label for="dashboard-range" class="form-label mb-0">Time range</label>
+    <select id="dashboard-range" class="form-select form-select-sm">
+      <option value="900">Last 15 minutes</option>
+      <option value="3600" selected>Last hour</option>
+      <option value="21600">Last 6 hours</option>
+      <option value="86400">Last 24 hours</option>
+    </select>
+  </div>
+
+  <div class="chart-grid">
+    <div class="chart-card">
+      <div class="chart-title">CPU</div>
+      <svg id="chart-cpu" class="metric-chart" role="img" aria-label="CPU over time"></svg>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Memory</div>
+      <svg id="chart-memory" class="metric-chart" role="img" aria-label="Memory over time"></svg>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">NAT Ports</div>
+      <svg id="chart-ports" class="metric-chart" role="img" aria-label="NAT ports over time"></svg>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Connections</div>
+      <svg id="chart-connections" class="metric-chart" role="img" aria-label="Connections over time"></svg>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Network Throughput</div>
+      <svg id="chart-network" class="metric-chart" role="img" aria-label="Network throughput over time"></svg>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Packet Throughput</div>
+      <svg id="chart-packets" class="metric-chart" role="img" aria-label="Packet throughput over time"></svg>
+    </div>
+  </div>
 </section>
 </div>
 
@@ -243,10 +281,8 @@
   <div class="row g-3 align-items-end">
     <div class="col-md-3">
       <label for="backup-auth-method" class="form-label">OCI auth</label>
-      <select id="backup-auth-method" class="form-select form-select-sm">
+      <select id="backup-auth-method" class="form-select form-select-sm" disabled>
         <option value="instance_principal">Instance principal</option>
-        <option value="resource_principal">Resource principal</option>
-        <option value="config_file">Config file</option>
       </select>
     </div>
     <div class="col-md-3">

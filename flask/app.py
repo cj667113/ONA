@@ -59,8 +59,6 @@ CONFIG_KEYS = (
     "ORACLE_JWKS_URL",
     "OCI_AUTH_METHOD",
     "OCI_REGION",
-    "OCI_CONFIG_FILE",
-    "OCI_CONFIG_PROFILE",
     "OCI_COMPARTMENT_ID",
     "OCI_NAMESPACE",
     "ONA_BACKUP_BUCKET",
@@ -99,7 +97,7 @@ OCI_REGION_RE = re.compile(r"^[A-Za-z0-9-]+(?:-[A-Za-z0-9-]+)*-[0-9]+$")
 OCI_OCID_RE = re.compile(r"^ocid1\.[A-Za-z0-9_.:-]+$")
 BUCKET_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
 BACKUP_PREFIX_RE = re.compile(r"^[A-Za-z0-9._/+@=-]{0,512}$")
-ALLOWED_OCI_AUTH_METHODS = {"instance_principal", "resource_principal", "config_file"}
+ALLOWED_OCI_AUTH_METHODS = {"instance_principal"}
 ALLOWED_BACKUP_SCHEDULES = {"manual", "hourly", "daily", "weekly"}
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 DEFAULT_BACKUP_PREFIX = "ona-backups/"
@@ -112,9 +110,13 @@ _scheduler_started = False
 _scheduler_lock = threading.Lock()
 _config_lock = threading.Lock()
 _metrics_lock = threading.Lock()
+_dashboard_history_lock = threading.Lock()
 _last_cpu_sample = None
 _last_network_sample = None
 _last_conntrack_sample = None
+_dashboard_history = []
+_dashboard_history_retention_seconds = 24 * 60 * 60
+_dashboard_history_max_samples = 5000
 
 
 class RuleValidationError(ValueError):
@@ -579,10 +581,8 @@ def backup_policy(overrides=None):
         )
 
     return {
-        "auth_method": config.get("OCI_AUTH_METHOD", "instance_principal"),
+        "auth_method": "instance_principal",
         "region": config.get("OCI_REGION", ""),
-        "config_file": config.get("OCI_CONFIG_FILE", ""),
-        "config_profile": config.get("OCI_CONFIG_PROFILE", "DEFAULT"),
         "compartment_id": config.get("OCI_COMPARTMENT_ID", ""),
         "namespace": config.get("OCI_NAMESPACE", ""),
         "bucket": config.get("ONA_BACKUP_BUCKET", ""),
@@ -602,8 +602,6 @@ def backup_policy(overrides=None):
 def public_backup_policy(policy=None):
     policy = policy or backup_policy()
     public = dict(policy)
-    public.pop("config_file", None)
-    public.pop("config_profile", None)
     weekday = int(public["weekday"]) if str(public["weekday"]).isdigit() else 0
     if weekday < 0 or weekday >= len(WEEKDAYS):
         weekday = 0
@@ -656,7 +654,7 @@ def validate_backup_policy_payload(payload):
 
     auth_method = str(payload.get("auth_method", "instance_principal")).strip()
     if auth_method not in ALLOWED_OCI_AUTH_METHODS:
-        raise RuleValidationError("Unsupported OCI authentication method.")
+        raise RuleValidationError("Backups only support OCI instance principal authentication.")
 
     region = str(payload.get("region", "")).strip()
     if region and not OCI_REGION_RE.fullmatch(region):
@@ -707,28 +705,11 @@ def ensure_oci_sdk():
 def oci_client(overrides=None):
     ensure_oci_sdk()
     policy = backup_policy(overrides)
-    auth_method = policy["auth_method"]
-
-    if auth_method == "instance_principal":
-        signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-        client_config = {}
-        if policy["region"]:
-            client_config["region"] = policy["region"]
-        return oci.object_storage.ObjectStorageClient(client_config, signer=signer)
-
-    if auth_method == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        client_config = {}
-        if policy["region"]:
-            client_config["region"] = policy["region"]
-        return oci.object_storage.ObjectStorageClient(client_config, signer=signer)
-
-    config_path = policy["config_file"] or oci.config.DEFAULT_LOCATION
-    profile = policy["config_profile"] or "DEFAULT"
-    client_config = oci.config.from_file(config_path, profile_name=profile)
+    signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
+    client_config = {}
     if policy["region"]:
         client_config["region"] = policy["region"]
-    return oci.object_storage.ObjectStorageClient(client_config)
+    return oci.object_storage.ObjectStorageClient(client_config, signer=signer)
 
 
 def object_storage_namespace(client, policy):
@@ -1516,15 +1497,36 @@ def rule_count_metrics():
         return {"dnat": 0, "snat": 0, "total": 0, "error": str(exc)}
 
 
-def dashboard_metrics():
-    return {
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+def record_dashboard_sample(sample):
+    cutoff = sample["epoch"] - _dashboard_history_retention_seconds
+    with _dashboard_history_lock:
+        _dashboard_history.append(sample)
+        del _dashboard_history[: max(0, len(_dashboard_history) - _dashboard_history_max_samples)]
+        while _dashboard_history and _dashboard_history[0].get("epoch", 0) < cutoff:
+            _dashboard_history.pop(0)
+
+
+def dashboard_metrics(record=True):
+    now = time.time()
+    sample = {
+        "timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "epoch": now,
         "cpu": cpu_metrics(),
         "memory": memory_metrics(),
         "nat": conntrack_metrics(),
         "network": network_metrics(),
         "rules": rule_count_metrics(),
     }
+    if record:
+        record_dashboard_sample(sample)
+    return sample
+
+
+def dashboard_history(range_seconds):
+    now = time.time()
+    cutoff = now - range_seconds
+    with _dashboard_history_lock:
+        return [sample for sample in _dashboard_history if sample.get("epoch", 0) >= cutoff]
 
 
 def provider_metadata():
@@ -1684,7 +1686,7 @@ def backup_api_exception_response(exc, status_code=502):
 
 def bucket_query_overrides():
     return {
-        "OCI_AUTH_METHOD": request.args.get("auth_method", ""),
+        "OCI_AUTH_METHOD": "instance_principal",
         "OCI_REGION": request.args.get("region", ""),
         "OCI_COMPARTMENT_ID": request.args.get("compartment_id", ""),
         "OCI_NAMESPACE": request.args.get("namespace", ""),
@@ -1792,6 +1794,20 @@ def api_dashboard_stats(current_user):
     return jsonify(dashboard_metrics())
 
 
+@app.route("/api/dashboard/history")
+@token_required
+def api_dashboard_history(current_user):
+    try:
+        range_seconds = int(request.args.get("range", "3600"))
+    except ValueError:
+        range_seconds = 3600
+    range_seconds = max(60, min(_dashboard_history_retention_seconds, range_seconds))
+    samples = dashboard_history(range_seconds)
+    if not samples:
+        samples = [dashboard_metrics()]
+    return jsonify({"range_seconds": range_seconds, "samples": samples})
+
+
 @app.route("/api/dashboard/stream")
 @token_required
 def api_dashboard_stream(current_user):
@@ -1815,8 +1831,9 @@ def api_save_backup_policy(current_user):
         data = request.get_json(silent=True)
         if data is None:
             raise RuleValidationError("Expected JSON request body.")
-        save_file_config(validate_backup_policy_payload(data))
-        return jsonify({"policy": public_backup_policy(), "message": "Backup policy saved."})
+        updates = validate_backup_policy_payload(data)
+        save_file_config(updates)
+        return jsonify({"policy": public_backup_policy(backup_policy()), "message": "Backup policy saved."})
     except RuleValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:

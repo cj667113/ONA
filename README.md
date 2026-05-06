@@ -68,7 +68,7 @@ For lab-only direct Flask HTTP deployments, set `ADDRESS=http://IP_OR_DNS_OF_THE
 ## Step 7: Optional Object Storage Backups
 The Backups panel in the UI can list Object Storage buckets, create zip backups of the ONA-managed iptables rules, schedule recurring backups, and restore a selected backup.
 
-By default, ONA uses OCI instance principal authentication. Put the compute instance in a dynamic group and grant it access to the backup compartment, for example:
+ONA uses OCI instance principal authentication for backups. Put the compute instance in a dynamic group and grant it access to the backup compartment, for example:
 
     Allow dynamic-group ONA_DYNAMIC_GROUP to inspect buckets in compartment ONA_COMPARTMENT
     Allow dynamic-group ONA_DYNAMIC_GROUP to manage objects in compartment ONA_COMPARTMENT

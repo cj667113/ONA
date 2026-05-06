@@ -146,8 +146,7 @@
 
     #backup-list td:first-child,
     #vnic-list td:nth-child(3) {
-      max-width: 520px;
-      overflow-wrap: anywhere;
+      max-width: 280px;
     }
 
     .metric-grid {
@@ -194,6 +193,83 @@
 
     .metric-progress .progress-bar {
       background-color: var(--ona-primary);
+    }
+
+    .chart-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      margin: 18px 0 12px;
+    }
+
+    .chart-toolbar .panel-title {
+      margin-right: auto;
+    }
+
+    .chart-toolbar .form-select {
+      width: auto;
+      min-width: 170px;
+    }
+
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .chart-card {
+      border: 1px solid var(--ona-border-soft);
+      border-radius: 8px;
+      padding: 14px;
+      background: #ffffff;
+    }
+
+    .chart-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: #334155;
+      margin-bottom: 8px;
+    }
+
+    .metric-chart {
+      display: block;
+      width: 100%;
+      height: 230px;
+    }
+
+    .chart-axis,
+    .chart-grid-line {
+      stroke: #dbe3ed;
+      stroke-width: 1;
+    }
+
+    .chart-grid-line {
+      stroke-dasharray: 3 4;
+    }
+
+    .chart-line {
+      fill: none;
+      stroke: var(--ona-primary);
+      stroke-width: 2.5;
+      stroke-linejoin: round;
+      stroke-linecap: round;
+    }
+
+    .chart-axis-text {
+      fill: var(--ona-muted);
+      font-size: 11px;
+    }
+
+    .chart-axis-label {
+      fill: #475569;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .chart-empty {
+      fill: var(--ona-muted);
+      font-size: 13px;
     }
 
     .table-shell {
@@ -309,9 +385,36 @@
       font-size: 0.92rem;
     }
 
+    .vnic-id-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .vnic-id-text {
+      display: inline-block;
+      max-width: 190px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+
+    .copy-ocid-btn {
+      flex: 0 0 auto;
+      padding: 3px 8px;
+      font-size: 0.76rem;
+      line-height: 1.2;
+    }
+
     @media (max-width: 992px) {
       .metric-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .chart-grid {
+        grid-template-columns: 1fr;
       }
 
       .source-controls-grid {
@@ -343,8 +446,18 @@
       }
 
       .metric-grid,
+      .chart-grid,
       .source-controls-grid {
         grid-template-columns: 1fr;
+      }
+
+      .chart-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .chart-toolbar .form-select {
+        width: 100%;
       }
 
       .metric-grid .wide {

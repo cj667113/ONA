@@ -14,6 +14,8 @@ let tempDropDown = document.getElementById("temp-dropdown");
 let tempDropDownSNATProtocol = document.getElementById("temp-dropdown-snat-protocol");
 let tempDropDownSNAT = document.getElementById("temp-dropdown-2");
 let dashboardPollTimer = null;
+let dashboardHistory = [];
+let dashboardRangeSeconds = 3600;
 let snatInterfaceOptions = [];
 
 console.log("V1.6.1 Loaded");
@@ -42,6 +44,8 @@ $(document).ready(function () {
   updateDropDowns();
   loadVnicState();
   loadBackupState();
+  setupDashboardCharts();
+  loadDashboardHistory();
   startDashboardStream();
 
   //Update select element value when selection changes
@@ -500,20 +504,75 @@ function vnicElement(id) {
   return document.getElementById(id);
 }
 
-function setSnatInterfaceOptions(interfaces) {
+function addInterfaceOption(options, seen, name, addresses) {
+  var normalized = normalizeInterfaceValue(name);
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  options.push({
+    value: normalized,
+    label: normalized + (addresses && addresses.length ? " (" + addresses.join(", ") + ")" : ""),
+  });
+}
+
+function scannedInterfaceOptions(scan) {
   var seen = new Set();
-  snatInterfaceOptions = [];
-  for (let item of interfaces || []) {
-    if (!item || !item.name || seen.has(item.name)) {
+  var options = [];
+  for (let item of scan.interfaces || []) {
+    if (!item || !item.name) {
       continue;
     }
-    seen.add(item.name);
-    snatInterfaceOptions.push({
-      value: item.name,
-      label: item.name + (item.addresses && item.addresses.length ? " (" + item.addresses.join(", ") + ")" : ""),
-    });
+    addInterfaceOption(options, seen, item.name, item.addresses || []);
   }
+  for (let ipInfo of scan.source_ips || []) {
+    addInterfaceOption(options, seen, ipInfo.interface, []);
+  }
+  return options;
+}
+
+function setSnatInterfaceOptions(scan) {
+  snatInterfaceOptions = scannedInterfaceOptions(scan || {});
   refreshSnatInterfaceCells();
+}
+
+function populateInterfaceSelect(select, options, selectedValue, placeholderText) {
+  var selected = normalizeInterfaceValue(selectedValue);
+  var hasSelected = options.some(function (option) {
+    return option.value === selected;
+  });
+
+  select.replaceChildren();
+  if (!selected && options.length) {
+    selected = options[0].value;
+    hasSelected = true;
+  }
+
+  if (selected && !hasSelected) {
+    var currentOption = document.createElement("option");
+    currentOption.value = selected;
+    currentOption.textContent = selected + " (current)";
+    currentOption.selected = true;
+    select.appendChild(currentOption);
+  } else {
+    var placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = options.length ? placeholderText : "No interfaces loaded";
+    placeholder.selected = !selected;
+    select.appendChild(placeholder);
+  }
+
+  for (let optionData of options) {
+    var option = document.createElement("option");
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    if (optionData.value === selected) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  }
+
+  select.disabled = !options.length && !selected;
 }
 
 function refreshSnatInterfaceCells() {
@@ -544,6 +603,84 @@ function setVnicStatus(message, isError) {
   status.className = isError ? "panel-status text-danger" : "panel-status";
 }
 
+function shortOcid(value) {
+  var text = (value || "").trim();
+  if (!text) {
+    return "-";
+  }
+  if (text.length <= 28) {
+    return text;
+  }
+  return text.slice(0, 18) + "..." + text.slice(-8);
+}
+
+function copyText(value, button) {
+  var text = (value || "").trim();
+  if (!text) {
+    return;
+  }
+
+  function markCopied() {
+    var original = button.textContent;
+    button.textContent = "Copied";
+    window.setTimeout(function () {
+      button.textContent = original;
+    }, 1200);
+  }
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(markCopied).catch(function () {
+      fallbackCopyText(text, markCopied);
+    });
+    return;
+  }
+  fallbackCopyText(text, markCopied);
+}
+
+function fallbackCopyText(text, onCopied) {
+  var textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.select();
+  try {
+    document.execCommand("copy");
+    onCopied();
+  } catch (error) {
+    console.error(error);
+  }
+  textArea.remove();
+}
+
+function vnicIdCell(value) {
+  var cell = document.createElement("td");
+  var text = (value || "").trim();
+  var wrapper = document.createElement("div");
+  wrapper.className = "vnic-id-cell";
+
+  var label = document.createElement("span");
+  label.className = "vnic-id-text";
+  label.textContent = shortOcid(text);
+  label.title = text || "-";
+  wrapper.appendChild(label);
+
+  if (text) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-outline-primary btn-sm copy-ocid-btn";
+    button.textContent = "Copy";
+    button.addEventListener("click", function () {
+      copyText(text, button);
+    });
+    wrapper.appendChild(button);
+  }
+
+  cell.appendChild(wrapper);
+  return cell;
+}
+
 function snatPoolPayloadFromForm() {
   var selectedIps = [];
   document.querySelectorAll(".snat-source-checkbox:checked").forEach(function (checkbox) {
@@ -562,30 +699,21 @@ function renderVnicState(data) {
   var capacity = data.capacity || {};
   var selectedIps = new Set(pool.source_ips || []);
   var sourceIps = scan.source_ips || [];
-  var interfaces = scan.interfaces || [];
   var interfaceSelect = vnicElement("snat-pool-interface");
   var vnicList = vnicElement("vnic-list");
 
-  setSnatInterfaceOptions(interfaces);
+  setSnatInterfaceOptions(scan);
 
   if (!vnicList || !interfaceSelect) {
     return;
   }
 
-  interfaceSelect.replaceChildren();
-  var interfacePlaceholder = document.createElement("option");
-  interfacePlaceholder.value = "";
-  interfacePlaceholder.textContent = interfaces.length ? "Select interface" : "No interfaces";
-  interfaceSelect.appendChild(interfacePlaceholder);
-  for (let item of interfaces) {
-    var interfaceOption = document.createElement("option");
-    interfaceOption.value = item.name;
-    interfaceOption.textContent = item.name + (item.addresses && item.addresses.length ? " (" + item.addresses.join(", ") + ")" : "");
-    if (item.name === pool.interface) {
-      interfaceOption.selected = true;
-    }
-    interfaceSelect.appendChild(interfaceOption);
-  }
+  populateInterfaceSelect(
+    interfaceSelect,
+    snatInterfaceOptions,
+    pool.interface || interfaceSelect.value,
+    "Select interface"
+  );
 
   vnicElement("snat-pool-enabled").checked = Boolean(pool.enabled);
   vnicElement("snat-pool-capacity").textContent = formatNumber(capacity.total_available_ports) +
@@ -621,8 +749,7 @@ function renderVnicState(data) {
     ipCell.textContent = ipInfo.ip + (ipInfo.primary ? " primary" : "");
     row.appendChild(ipCell);
 
-    var vnicCell = document.createElement("td");
-    vnicCell.textContent = ipInfo.vnic_id || "-";
+    var vnicCell = vnicIdCell(ipInfo.vnic_id);
     row.appendChild(vnicCell);
 
     var interfaceCell = document.createElement("td");
@@ -703,7 +830,7 @@ function setBackupStatus(message, isError) {
 
 function backupPolicyFromForm() {
   return {
-    auth_method: backupElement("backup-auth-method").value,
+    auth_method: "instance_principal",
     region: backupElement("backup-region").value.trim(),
     compartment_id: backupElement("backup-compartment").value.trim(),
     namespace: backupElement("backup-namespace").value.trim(),
@@ -718,7 +845,7 @@ function backupPolicyFromForm() {
 }
 
 function populateBackupPolicy(policy) {
-  backupElement("backup-auth-method").value = policy.auth_method || "instance_principal";
+  backupElement("backup-auth-method").value = "instance_principal";
   backupElement("backup-region").value = policy.region || "";
   backupElement("backup-compartment").value = policy.compartment_id || "";
   backupElement("backup-namespace").value = policy.namespace || "";
@@ -863,7 +990,7 @@ function loadBackupState() {
 function refreshBuckets() {
   var policy = backupPolicyFromForm();
   var params = new URLSearchParams({
-    auth_method: policy.auth_method,
+    auth_method: "instance_principal",
     region: policy.region,
     compartment_id: policy.compartment_id,
     namespace: policy.namespace,
@@ -886,7 +1013,8 @@ function refreshBuckets() {
 function saveBackupPolicy() {
   setBackupStatus("Saving backup policy...", false);
   requestJson("/api/backups/policy", "POST", backupPolicyFromForm())
-    .then(function () {
+    .then(function (data) {
+      populateBackupPolicy(data.policy || {});
       setBackupStatus("Backup policy saved.", false);
       loadBackupState();
     })
@@ -897,8 +1025,13 @@ function saveBackupPolicy() {
 }
 
 function runBackupNow() {
-  setBackupStatus("Creating backup...", false);
-  requestJson("/api/backups/run", "POST", {})
+  setBackupStatus("Saving backup policy...", false);
+  requestJson("/api/backups/policy", "POST", backupPolicyFromForm())
+    .then(function (data) {
+      populateBackupPolicy(data.policy || {});
+      setBackupStatus("Creating backup...", false);
+      return requestJson("/api/backups/run", "POST", {});
+    })
     .then(function (data) {
       setBackupStatus("Backup created: " + data.backup.object_name, false);
       loadBackupState();
@@ -962,6 +1095,252 @@ function formatRatePackets(value) {
   return Number(value || 0).toFixed(1) + " pkt/s";
 }
 
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  var numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+var dashboardChartDefinitions = [
+  {
+    id: "cpu",
+    yLabel: "CPU %",
+    format: formatPercent,
+    min: 0,
+    max: 100,
+    value: function (sample) {
+      return numberOrNull(sample.cpu && sample.cpu.percent);
+    },
+  },
+  {
+    id: "memory",
+    yLabel: "Memory %",
+    format: formatPercent,
+    min: 0,
+    max: 100,
+    value: function (sample) {
+      return numberOrNull(sample.memory && sample.memory.percent);
+    },
+  },
+  {
+    id: "ports",
+    yLabel: "Ports used",
+    format: formatNumber,
+    value: function (sample) {
+      return numberOrNull(sample.nat && sample.nat.ports_in_use);
+    },
+  },
+  {
+    id: "connections",
+    yLabel: "Connections",
+    format: formatNumber,
+    value: function (sample) {
+      return numberOrNull(sample.nat && sample.nat.total_connections);
+    },
+  },
+  {
+    id: "network",
+    yLabel: "Bytes/s",
+    format: formatRateBytes,
+    value: function (sample) {
+      var rates = sample.network && sample.network.rates;
+      return numberOrNull(rates && rates.total_bytes_per_second);
+    },
+  },
+  {
+    id: "packets",
+    yLabel: "Packets/s",
+    format: formatRatePackets,
+    value: function (sample) {
+      var rates = sample.network && sample.network.rates;
+      return numberOrNull(rates && rates.total_packets_per_second);
+    },
+  },
+];
+
+function sampleEpoch(sample) {
+  if (sample && sample.epoch !== undefined) {
+    return Number(sample.epoch);
+  }
+  var timestamp = sample ? Date.parse(sample.timestamp) : NaN;
+  return Number.isNaN(timestamp) ? null : timestamp / 1000;
+}
+
+function addDashboardSamples(samples) {
+  var byTimestamp = new Map();
+  for (let sample of dashboardHistory) {
+    var existingEpoch = sampleEpoch(sample);
+    if (existingEpoch !== null) {
+      byTimestamp.set(String(existingEpoch), sample);
+    }
+  }
+  for (let sample of samples || []) {
+    var epoch = sampleEpoch(sample);
+    if (epoch === null) {
+      continue;
+    }
+    sample.epoch = epoch;
+    byTimestamp.set(String(epoch), sample);
+  }
+
+  var cutoff = Date.now() / 1000 - 86400;
+  dashboardHistory = Array.from(byTimestamp.values())
+    .filter(function (sample) {
+      return sampleEpoch(sample) >= cutoff;
+    })
+    .sort(function (a, b) {
+      return sampleEpoch(a) - sampleEpoch(b);
+    });
+}
+
+function filteredDashboardHistory() {
+  var cutoff = Date.now() / 1000 - dashboardRangeSeconds;
+  return dashboardHistory.filter(function (sample) {
+    return sampleEpoch(sample) >= cutoff;
+  });
+}
+
+function setupDashboardCharts() {
+  var rangeSelect = document.getElementById("dashboard-range");
+  if (!rangeSelect) {
+    return;
+  }
+  dashboardRangeSeconds = Number(rangeSelect.value || 3600);
+  rangeSelect.addEventListener("change", function () {
+    dashboardRangeSeconds = Number(rangeSelect.value || 3600);
+    loadDashboardHistory();
+  });
+}
+
+function loadDashboardHistory() {
+  if (!document.getElementById("stats-panel")) {
+    return;
+  }
+  requestJson("/api/dashboard/history?range=" + encodeURIComponent(dashboardRangeSeconds), "GET")
+    .then(function (data) {
+      addDashboardSamples(data.samples || []);
+      renderDashboardCharts();
+    })
+    .catch(function (error) {
+      console.error(error);
+      renderDashboardCharts();
+    });
+}
+
+function svgNode(tag, attrs) {
+  var node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (let key of Object.keys(attrs || {})) {
+    node.setAttribute(key, attrs[key]);
+  }
+  return node;
+}
+
+function formatChartTime(epoch) {
+  return new Date(epoch * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function chartScale(maxValue, fixedMax) {
+  if (fixedMax !== undefined) {
+    return fixedMax;
+  }
+  if (!maxValue || maxValue <= 0) {
+    return 1;
+  }
+  var magnitude = Math.pow(10, Math.floor(Math.log10(maxValue)));
+  return Math.ceil(maxValue / magnitude) * magnitude;
+}
+
+function renderMetricChart(definition, samples) {
+  var svg = document.getElementById("chart-" + definition.id);
+  if (!svg) {
+    return;
+  }
+
+  var width = 420;
+  var height = 230;
+  var left = 58;
+  var right = 16;
+  var top = 18;
+  var bottom = 46;
+  var plotWidth = width - left - right;
+  var plotHeight = height - top - bottom;
+  var now = Date.now() / 1000;
+  var xMin = now - dashboardRangeSeconds;
+  var xMax = now;
+  var values = samples.map(function (sample) {
+    return { epoch: sampleEpoch(sample), value: definition.value(sample) };
+  }).filter(function (point) {
+    return point.epoch !== null && point.value !== null && point.epoch >= xMin;
+  });
+  var yMin = definition.min !== undefined ? definition.min : 0;
+  var observedMax = values.reduce(function (maxValue, point) {
+    return Math.max(maxValue, point.value);
+  }, yMin);
+  var yMax = chartScale(observedMax, definition.max);
+  if (yMax <= yMin) {
+    yMax = yMin + 1;
+  }
+
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+
+  for (let index = 0; index <= 3; index++) {
+    var ratio = index / 3;
+    var y = top + plotHeight - ratio * plotHeight;
+    var tickValue = yMin + ratio * (yMax - yMin);
+    svg.appendChild(svgNode("line", { x1: left, y1: y, x2: width - right, y2: y, class: "chart-grid-line" }));
+    var tick = svgNode("text", { x: left - 8, y: y + 4, "text-anchor": "end", class: "chart-axis-text" });
+    tick.textContent = definition.format(tickValue);
+    svg.appendChild(tick);
+  }
+
+  svg.appendChild(svgNode("line", { x1: left, y1: top, x2: left, y2: height - bottom, class: "chart-axis" }));
+  svg.appendChild(svgNode("line", { x1: left, y1: height - bottom, x2: width - right, y2: height - bottom, class: "chart-axis" }));
+
+  var startLabel = svgNode("text", { x: left, y: height - 24, "text-anchor": "middle", class: "chart-axis-text" });
+  startLabel.textContent = formatChartTime(xMin);
+  svg.appendChild(startLabel);
+  var endLabel = svgNode("text", { x: width - right, y: height - 24, "text-anchor": "middle", class: "chart-axis-text" });
+  endLabel.textContent = formatChartTime(xMax);
+  svg.appendChild(endLabel);
+
+  var xLabel = svgNode("text", { x: left + plotWidth / 2, y: height - 6, "text-anchor": "middle", class: "chart-axis-label" });
+  xLabel.textContent = "Time";
+  svg.appendChild(xLabel);
+  var yLabel = svgNode("text", {
+    x: 14,
+    y: top + plotHeight / 2,
+    "text-anchor": "middle",
+    transform: "rotate(-90 14 " + (top + plotHeight / 2) + ")",
+    class: "chart-axis-label",
+  });
+  yLabel.textContent = definition.yLabel;
+  svg.appendChild(yLabel);
+
+  if (values.length < 2) {
+    var empty = svgNode("text", { x: left + plotWidth / 2, y: top + plotHeight / 2, "text-anchor": "middle", class: "chart-empty" });
+    empty.textContent = "Collecting data";
+    svg.appendChild(empty);
+    return;
+  }
+
+  var points = values.map(function (point) {
+    var x = left + ((point.epoch - xMin) / (xMax - xMin)) * plotWidth;
+    var y = top + plotHeight - ((point.value - yMin) / (yMax - yMin)) * plotHeight;
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  svg.appendChild(svgNode("polyline", { points: points, class: "chart-line" }));
+}
+
+function renderDashboardCharts() {
+  var samples = filteredDashboardHistory();
+  for (let definition of dashboardChartDefinitions) {
+    renderMetricChart(definition, samples);
+  }
+}
+
 function renderDashboardStats(data) {
   var cpuPercent = data.cpu ? data.cpu.percent : null;
   var memory = data.memory || {};
@@ -994,6 +1373,8 @@ function renderDashboardStats(data) {
   setText("metric-throughput-packets", formatRatePackets(rates.total_packets_per_second));
   setText("metric-rule-counts", "DNAT " + formatNumber(rules.dnat) + " / SNAT " + formatNumber(rules.snat));
   setText("metric-updated", formatDate(data.timestamp));
+  addDashboardSamples([data]);
+  renderDashboardCharts();
 }
 
 function loadDashboardStats() {
