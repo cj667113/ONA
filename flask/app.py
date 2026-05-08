@@ -3,6 +3,7 @@ import hmac
 import ipaddress
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -122,6 +123,7 @@ _last_cpu_sample = None
 _last_network_sample = None
 _last_conntrack_sample = None
 _dashboard_history = []
+_dashboard_history_loaded = False
 _dashboard_history_retention_seconds = 24 * 60 * 60
 _dashboard_history_max_samples = 5000
 
@@ -140,6 +142,12 @@ class VnicScanError(RuntimeError):
 
 def config_file_path():
     return os.getenv("ONA_CONFIG_FILE") or os.path.join(app.instance_path, "config.json")
+
+
+def dashboard_history_file_path():
+    return os.getenv("ONA_DASHBOARD_HISTORY_FILE") or os.path.join(
+        app.instance_path, "dashboard_history.json"
+    )
 
 
 def load_file_config():
@@ -2020,13 +2028,112 @@ def rule_count_metrics():
         return {"dnat": 0, "snat": 0, "total": 0, "error": str(exc)}
 
 
+def normalize_dashboard_sample(sample):
+    if not isinstance(sample, dict):
+        return None
+
+    try:
+        epoch = float(sample.get("epoch"))
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(epoch):
+        return None
+
+    normalized = dict(sample)
+    normalized["epoch"] = epoch
+    if not isinstance(normalized.get("timestamp"), str) or not normalized["timestamp"]:
+        normalized["timestamp"] = (
+            datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    return normalized
+
+
+def trim_dashboard_samples(samples, now=None):
+    if now is None:
+        now = time.time()
+    cutoff = float(now) - _dashboard_history_retention_seconds
+    trimmed = []
+
+    for sample in samples:
+        normalized = normalize_dashboard_sample(sample)
+        if normalized and normalized["epoch"] >= cutoff:
+            trimmed.append(normalized)
+
+    trimmed.sort(key=lambda sample: sample["epoch"])
+    return trimmed[-_dashboard_history_max_samples:]
+
+
+def load_dashboard_history_file():
+    path = dashboard_history_file_path()
+    try:
+        with open(path, "r", encoding="utf-8") as history_file:
+            data = json.load(history_file)
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as exc:
+        app.logger.warning("Unable to read dashboard history file %s: %s", path, exc)
+        return []
+
+    if isinstance(data, dict):
+        samples = data.get("samples", [])
+    elif isinstance(data, list):
+        samples = data
+    else:
+        app.logger.warning("Dashboard history file %s did not contain a sample list.", path)
+        return []
+
+    if not isinstance(samples, list):
+        app.logger.warning("Dashboard history file %s did not contain a sample list.", path)
+        return []
+
+    return trim_dashboard_samples(samples)
+
+
+def write_dashboard_history_file(samples):
+    path = dashboard_history_file_path()
+    try:
+        serialized = json.dumps({"samples": samples}, indent=2) + "\n"
+    except (TypeError, ValueError) as exc:
+        app.logger.warning("Unable to serialize dashboard history for %s: %s", path, exc)
+        return
+
+    directory = os.path.dirname(path)
+    try:
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        temp_path = f"{path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as history_file:
+            history_file.write(serialized)
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, path)
+    except OSError as exc:
+        app.logger.warning("Unable to write dashboard history file %s: %s", path, exc)
+
+
+def ensure_dashboard_history_loaded_locked():
+    global _dashboard_history, _dashboard_history_loaded
+
+    if not _dashboard_history_loaded:
+        _dashboard_history = load_dashboard_history_file()
+        _dashboard_history_loaded = True
+
+
 def record_dashboard_sample(sample):
-    cutoff = sample["epoch"] - _dashboard_history_retention_seconds
+    global _dashboard_history
+
     with _dashboard_history_lock:
-        _dashboard_history.append(sample)
-        del _dashboard_history[: max(0, len(_dashboard_history) - _dashboard_history_max_samples)]
-        while _dashboard_history and _dashboard_history[0].get("epoch", 0) < cutoff:
-            _dashboard_history.pop(0)
+        ensure_dashboard_history_loaded_locked()
+        normalized = normalize_dashboard_sample(sample)
+        if not normalized:
+            return
+
+        _dashboard_history.append(normalized)
+        _dashboard_history = trim_dashboard_samples(
+            _dashboard_history, now=normalized["epoch"]
+        )
+        write_dashboard_history_file(_dashboard_history)
 
 
 def dashboard_metrics(record=True):
@@ -2049,7 +2156,10 @@ def dashboard_history(range_seconds):
     now = time.time()
     cutoff = now - range_seconds
     with _dashboard_history_lock:
-        return [sample for sample in _dashboard_history if sample.get("epoch", 0) >= cutoff]
+        ensure_dashboard_history_loaded_locked()
+        return [
+            sample for sample in _dashboard_history if sample.get("epoch", 0) >= cutoff
+        ]
 
 
 def provider_metadata():

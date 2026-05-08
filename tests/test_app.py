@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -169,6 +170,77 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(data, {})
         warning.assert_called_once()
+
+
+class DashboardHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.previous_history = ona_app._dashboard_history
+        self.previous_loaded = ona_app._dashboard_history_loaded
+        self.reset_dashboard_history()
+
+    def tearDown(self):
+        with ona_app._dashboard_history_lock:
+            ona_app._dashboard_history = self.previous_history
+            ona_app._dashboard_history_loaded = self.previous_loaded
+
+    def reset_dashboard_history(self):
+        with ona_app._dashboard_history_lock:
+            ona_app._dashboard_history = []
+            ona_app._dashboard_history_loaded = False
+
+    def test_dashboard_history_persists_for_future_logins(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            history_path = Path(tmp_dir) / "dashboard_history.json"
+            sample = {
+                "timestamp": "2026-05-08T00:00:00Z",
+                "epoch": time.time(),
+                "cpu": {"usage_percent": 12.5},
+                "memory": {"usage_percent": 24.0},
+                "nat": {"total_connections": 4},
+                "network": {"rx_bytes_per_second": 64},
+                "rules": {"total": 3},
+            }
+
+            with mock.patch.object(
+                ona_app, "dashboard_history_file_path", return_value=str(history_path)
+            ):
+                ona_app.record_dashboard_sample(sample)
+                with open(history_path, "r", encoding="utf-8") as history_file:
+                    persisted = json.load(history_file)
+
+                self.reset_dashboard_history()
+                loaded = ona_app.dashboard_history(3600)
+
+        self.assertEqual(len(persisted["samples"]), 1)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["cpu"]["usage_percent"], 12.5)
+        self.assertEqual(loaded[0]["rules"]["total"], 3)
+
+    def test_dashboard_history_recovers_from_invalid_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            history_path = Path(tmp_dir) / "dashboard_history.json"
+            history_path.write_text("{", encoding="utf-8")
+            sample = {
+                "timestamp": "2026-05-08T00:00:00Z",
+                "epoch": time.time(),
+                "cpu": {},
+                "memory": {},
+                "nat": {},
+                "network": {},
+                "rules": {},
+            }
+
+            with mock.patch.object(
+                ona_app, "dashboard_history_file_path", return_value=str(history_path)
+            ), mock.patch.object(ona_app.app.logger, "warning") as warning:
+                self.assertEqual(ona_app.dashboard_history(3600), [])
+                ona_app.record_dashboard_sample(sample)
+
+            with open(history_path, "r", encoding="utf-8") as history_file:
+                recovered = json.load(history_file)
+
+        warning.assert_called_once()
+        self.assertEqual(len(recovered["samples"]), 1)
 
 
 class ValidationTests(unittest.TestCase):
