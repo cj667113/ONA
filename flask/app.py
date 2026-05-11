@@ -89,6 +89,7 @@ REQUIRED_CONFIG_KEYS = (
 
 MANAGED_DNAT_CHAIN = "ONA_PREROUTING"
 MANAGED_SNAT_CHAIN = "ONA_POSTROUTING"
+MANAGED_FORWARD_CHAIN = "ONA_FORWARD"
 SNAT_POOL_CHAIN = "ONA_SNAT_POOL"
 SNAT_MARK_CHAIN = "ONA_SNAT_MARK"
 TEMP_CHAIN_SUFFIX = "_CHECK"
@@ -341,6 +342,11 @@ def ensure_managed_chains():
     ensure_jump("POSTROUTING", MANAGED_SNAT_CHAIN, "nat")
 
 
+def ensure_snat_forward_chain():
+    ensure_chain(MANAGED_FORWARD_CHAIN, "filter")
+    ensure_jump("FORWARD", MANAGED_FORWARD_CHAIN, "filter", position=1)
+
+
 def get_nat_rules():
     ensure_managed_chains()
     nat_rules = []
@@ -369,10 +375,29 @@ def parse_ip(value, field_name):
         raise RuleValidationError(f"{field_name} must be a valid IPv4 address.")
 
 
+def is_null_source(value):
+    return not str(value or "").strip() or str(value).strip().upper() == "NULL"
+
+
+def parse_optional_source_match(value):
+    normalized = str(value or "").strip()
+    if is_null_source(normalized):
+        return "Null"
+    try:
+        network = ipaddress.ip_network(normalized, strict=False)
+    except ValueError:
+        raise RuleValidationError("Source IP must be a valid IPv4 address or CIDR subnet.")
+    if not isinstance(network, ipaddress.IPv4Network):
+        raise RuleValidationError("Source IP must be a valid IPv4 address or CIDR subnet.")
+    if "/" not in normalized and network.prefixlen == 32:
+        return str(network.network_address)
+    return str(network)
+
+
 def parse_optional_source_ip(value, target):
     normalized = str(value or "").strip()
     if target == "MASQUERADE":
-        return "Null"
+        return parse_optional_source_match(normalized)
     if not normalized or normalized.upper() == "NULL":
         raise RuleValidationError("Source IP is required for SNAT rules.")
     return parse_ip(normalized, "Source IP")
@@ -456,6 +481,16 @@ def normalize_nat_payload(data):
     return normalized
 
 
+def snat_rule_source_match(rule):
+    if (
+        rule["chain"] == "POSTROUTING"
+        and rule["target"] == "MASQUERADE"
+        and not is_null_source(rule.get("source_ip"))
+    ):
+        return rule["source_ip"]
+    return None
+
+
 def build_iptables_command(rule, chain):
     if rule["chain"] == "PREROUTING":
         return [
@@ -480,9 +515,11 @@ def build_iptables_command(rule, chain):
         chain,
         "-p",
         rule["protocol"],
-        "-o",
-        rule["output_interface"],
     ]
+    source_match = snat_rule_source_match(rule)
+    if source_match:
+        command.extend(["-s", source_match])
+    command.extend(["-o", rule["output_interface"]])
     if rule.get("probability"):
         command.extend(
             [
@@ -500,6 +537,116 @@ def build_iptables_command(rule, chain):
     return command
 
 
+def deduplicate_commands(commands):
+    unique = []
+    seen = set()
+    for command in commands:
+        key = tuple(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(command)
+    return unique
+
+
+def build_snat_forward_commands(rule, chain):
+    if rule["chain"] != "POSTROUTING":
+        return []
+
+    outbound = ["-t", "filter", "-A", chain]
+    if rule["protocol"] != "all":
+        outbound.extend(["-p", rule["protocol"]])
+    source_match = snat_rule_source_match(rule)
+    if source_match:
+        outbound.extend(["-s", source_match])
+    outbound.extend(["-o", rule["output_interface"], "-j", "ACCEPT"])
+
+    established = ["-t", "filter", "-A", chain]
+    if rule["protocol"] != "all":
+        established.extend(["-p", rule["protocol"]])
+    if source_match:
+        established.extend(["-d", source_match])
+    established.extend(
+        [
+            "-i",
+            rule["output_interface"],
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ]
+    )
+    return [outbound, established]
+
+
+def snat_forward_commands(rules, chain):
+    commands = []
+    for rule in rules:
+        commands.extend(build_snat_forward_commands(rule, chain))
+    return deduplicate_commands(commands)
+
+
+def validate_snat_forward_commands(rules):
+    temp_chain = f"{MANAGED_FORWARD_CHAIN}{TEMP_CHAIN_SUFFIX}"
+    delete_chain_if_exists(temp_chain, "filter")
+    run_iptables(["-t", "filter", "-N", temp_chain])
+    try:
+        for command in snat_forward_commands(rules, temp_chain):
+            run_iptables(command)
+    finally:
+        delete_chain_if_exists(temp_chain, "filter")
+
+
+def snat_rules_from_current_nat():
+    _, snat_rules = process_nat_rules(get_nat_rules())
+    return list(snat_rules.values())
+
+
+def sync_snat_forward_rules(rules=None, pool=None):
+    if rules is None:
+        rules = snat_rules_from_current_nat()
+    if pool is None:
+        pool = snat_pool_policy()
+
+    ensure_snat_forward_chain()
+    run_iptables(["-t", "filter", "-F", MANAGED_FORWARD_CHAIN])
+
+    commands = []
+    if pool.get("enabled"):
+        commands.extend(snat_pool_forward_commands(pool, MANAGED_FORWARD_CHAIN))
+    commands.extend(snat_forward_commands(rules, MANAGED_FORWARD_CHAIN))
+
+    for command in deduplicate_commands(commands):
+        run_iptables(command)
+
+
+def configure_snat_forwarding_sysctls(interfaces):
+    write_proc_value("/proc/sys/net/ipv4/ip_forward", "1")
+    for name in ("all", "default", *sorted(set(interfaces))):
+        path = f"/proc/sys/net/ipv4/conf/{name}/rp_filter"
+        if os.path.exists(path):
+            write_proc_value(path, "0")
+
+
+def snat_forward_interfaces(rules, pool=None):
+    interfaces = [
+        rule["output_interface"]
+        for rule in rules
+        if rule["chain"] == "POSTROUTING" and rule.get("output_interface")
+    ]
+    if pool and pool.get("enabled"):
+        interfaces.extend(
+            source["interface"]
+            for source in snat_pool_sources(pool)
+            if source.get("interface")
+        )
+        if pool.get("interface"):
+            interfaces.append(pool["interface"])
+    return sorted(set(interfaces))
+
+
 def validate_commands_against_temp_chain(rules, managed_chain, rule_chain):
     temp_chain = f"{managed_chain}{TEMP_CHAIN_SUFFIX}"
     delete_chain_if_exists(temp_chain)
@@ -514,12 +661,19 @@ def validate_commands_against_temp_chain(rules, managed_chain, rule_chain):
 
 def replace_managed_rules(rules):
     ensure_managed_chains()
+    pool = snat_pool_policy()
     validate_commands_against_temp_chain(rules, MANAGED_DNAT_CHAIN, "PREROUTING")
     validate_commands_against_temp_chain(rules, MANAGED_SNAT_CHAIN, "POSTROUTING")
+    validate_snat_forward_commands(rules)
+
+    forward_interfaces = snat_forward_interfaces(rules, pool)
+    if forward_interfaces:
+        configure_snat_forwarding_sysctls(forward_interfaces)
 
     run_iptables(["-t", "nat", "-F", MANAGED_DNAT_CHAIN])
     run_iptables(["-t", "nat", "-F", MANAGED_SNAT_CHAIN])
-    if snat_pool_policy()["enabled"]:
+    sync_snat_forward_rules(rules, pool)
+    if pool["enabled"]:
         ensure_snat_pool_jump()
     for rule in rules:
         chain = MANAGED_DNAT_CHAIN if rule["chain"] == "PREROUTING" else MANAGED_SNAT_CHAIN
@@ -574,6 +728,10 @@ def process_nat_rules(nat_rules):
                     "source_ip": "Null",
                     "probability": None,
                 }
+                if "-s" in rule_data:
+                    collect["source_ip"] = parse_optional_source_match(
+                        rule_data[rule_data.index("-s") + 1]
+                    )
                 if "--to-source" in rule_data:
                     collect["source_ip"] = rule_data[rule_data.index("--to-source") + 1]
                 if "--probability" in rule_data:
@@ -600,6 +758,7 @@ def current_rules_payload():
         "managed_chains": {
             "dnat": MANAGED_DNAT_CHAIN,
             "snat": MANAGED_SNAT_CHAIN,
+            "forward": MANAGED_FORWARD_CHAIN,
         },
         "rule_count": len(normalized_rules),
         "rules": normalized_rules,
@@ -1573,6 +1732,30 @@ def snat_pool_nat_commands(pool, chain):
     return commands
 
 
+def snat_pool_forward_commands(pool, chain):
+    commands = []
+    for source in snat_pool_sources(pool):
+        interface = source["interface"]
+        commands.append(["-t", "filter", "-A", chain, "-o", interface, "-j", "ACCEPT"])
+        commands.append(
+            [
+                "-t",
+                "filter",
+                "-A",
+                chain,
+                "-i",
+                interface,
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-j",
+                "ACCEPT",
+            ]
+        )
+    return deduplicate_commands(commands)
+
+
 def snat_pool_mark_commands(pool, chain):
     commands = [
         ["-t", "mangle", "-A", chain, "-m", "addrtype", "--dst-type", "LOCAL", "-j", "RETURN"],
@@ -1633,18 +1816,24 @@ def snat_pool_mark_commands(pool, chain):
 def validate_snat_pool_runtime_commands(pool):
     nat_temp_chain = f"{SNAT_POOL_CHAIN}{TEMP_CHAIN_SUFFIX}"
     mark_temp_chain = f"{SNAT_MARK_CHAIN}{TEMP_CHAIN_SUFFIX}"
+    forward_temp_chain = f"{MANAGED_FORWARD_CHAIN}{TEMP_CHAIN_SUFFIX}"
     delete_chain_if_exists(nat_temp_chain, "nat")
     delete_chain_if_exists(mark_temp_chain, "mangle")
+    delete_chain_if_exists(forward_temp_chain, "filter")
     try:
         run_iptables(["-t", "nat", "-N", nat_temp_chain])
         run_iptables(["-t", "mangle", "-N", mark_temp_chain])
+        run_iptables(["-t", "filter", "-N", forward_temp_chain])
         for command in snat_pool_nat_commands(pool, nat_temp_chain):
             run_iptables(command)
         for command in snat_pool_mark_commands(pool, mark_temp_chain):
             run_iptables(command)
+        for command in snat_pool_forward_commands(pool, forward_temp_chain):
+            run_iptables(command)
     finally:
         delete_chain_if_exists(nat_temp_chain, "nat")
         delete_chain_if_exists(mark_temp_chain, "mangle")
+        delete_chain_if_exists(forward_temp_chain, "filter")
 
 
 def clear_snat_pool_policy_routes():
@@ -1704,11 +1893,7 @@ def write_proc_value(path, value):
 
 
 def configure_snat_pool_sysctls(pool):
-    write_proc_value("/proc/sys/net/ipv4/ip_forward", "1")
-    for name in ("all", "default", *[source["interface"] for source in snat_pool_sources(pool)]):
-        path = f"/proc/sys/net/ipv4/conf/{name}/rp_filter"
-        if os.path.exists(path):
-            write_proc_value(path, "0")
+    configure_snat_forwarding_sysctls(snat_forward_interfaces([], pool))
 
 
 def clear_snat_pool_runtime():
@@ -1718,6 +1903,7 @@ def clear_snat_pool_runtime():
     delete_chain_if_exists(SNAT_POOL_CHAIN, "nat")
     delete_chain_if_exists(SNAT_MARK_CHAIN, "mangle")
     clear_snat_pool_policy_routes()
+    sync_snat_forward_rules(pool={"enabled": False})
 
 
 def apply_snat_pool(pool):
@@ -1748,6 +1934,7 @@ def apply_snat_pool(pool):
             run_iptables(command)
         for command in snat_pool_nat_commands(pool, SNAT_POOL_CHAIN):
             run_iptables(command)
+        sync_snat_forward_rules(pool=pool)
     except Exception:
         if runtime_cleared:
             try:

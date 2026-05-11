@@ -97,6 +97,217 @@ class SnatPoolTests(unittest.TestCase):
             [["-t", "mangle", "-I", "PREROUTING", "1", "-j", ona_app.SNAT_MARK_CHAIN]],
         )
 
+    def test_snat_rule_builds_forward_accept_rules(self):
+        rule = {
+            "chain": "POSTROUTING",
+            "protocol": "all",
+            "target": "MASQUERADE",
+            "source_ip": "Null",
+            "output_interface": "eth1",
+            "probability": None,
+        }
+
+        commands = ona_app.build_snat_forward_commands(rule, ona_app.MANAGED_FORWARD_CHAIN)
+
+        self.assertEqual(
+            commands,
+            [
+                ["-t", "filter", "-A", ona_app.MANAGED_FORWARD_CHAIN, "-o", "eth1", "-j", "ACCEPT"],
+                [
+                    "-t",
+                    "filter",
+                    "-A",
+                    ona_app.MANAGED_FORWARD_CHAIN,
+                    "-i",
+                    "eth1",
+                    "-m",
+                    "conntrack",
+                    "--ctstate",
+                    "RELATED,ESTABLISHED",
+                    "-j",
+                    "ACCEPT",
+                ],
+            ],
+        )
+
+    def test_masquerade_rule_accepts_source_cidr_match(self):
+        rules = ona_app.normalize_nat_payload(
+            {
+                "0": {
+                    "chain": "POSTROUTING",
+                    "protocol": "all",
+                    "target": "MASQUERADE",
+                    "source_ip": "10.40.40.0/24",
+                    "output_interface": "eth1",
+                }
+            }
+        )
+
+        command = ona_app.build_iptables_command(rules[0], ona_app.MANAGED_SNAT_CHAIN)
+
+        self.assertEqual(rules[0]["source_ip"], "10.40.40.0/24")
+        self.assertEqual(
+            command,
+            [
+                "-t",
+                "nat",
+                "-A",
+                ona_app.MANAGED_SNAT_CHAIN,
+                "-p",
+                "all",
+                "-s",
+                "10.40.40.0/24",
+                "-o",
+                "eth1",
+                "-j",
+                "MASQUERADE",
+            ],
+        )
+
+    def test_masquerade_forward_rules_scope_source_cidr(self):
+        rule = {
+            "chain": "POSTROUTING",
+            "protocol": "all",
+            "target": "MASQUERADE",
+            "source_ip": "10.40.40.0/24",
+            "output_interface": "eth1",
+            "probability": None,
+        }
+
+        commands = ona_app.build_snat_forward_commands(rule, ona_app.MANAGED_FORWARD_CHAIN)
+
+        self.assertIn(
+            [
+                "-t",
+                "filter",
+                "-A",
+                ona_app.MANAGED_FORWARD_CHAIN,
+                "-s",
+                "10.40.40.0/24",
+                "-o",
+                "eth1",
+                "-j",
+                "ACCEPT",
+            ],
+            commands,
+        )
+        self.assertIn(
+            [
+                "-t",
+                "filter",
+                "-A",
+                ona_app.MANAGED_FORWARD_CHAIN,
+                "-d",
+                "10.40.40.0/24",
+                "-i",
+                "eth1",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-j",
+                "ACCEPT",
+            ],
+            commands,
+        )
+
+    def test_process_nat_rules_reads_masquerade_source_cidr(self):
+        _, snat_rules = ona_app.process_nat_rules(
+            [
+                "-A ONA_POSTROUTING -p all -s 10.40.40.0/24 -o eth1 -j MASQUERADE",
+            ]
+        )
+
+        self.assertEqual(snat_rules[0]["source_ip"], "10.40.40.0/24")
+
+    def test_snat_target_rejects_cidr_as_translation_ip(self):
+        with self.assertRaisesRegex(ona_app.RuleValidationError, "valid IPv4 address"):
+            ona_app.normalize_nat_payload(
+                {
+                    "0": {
+                        "chain": "POSTROUTING",
+                        "protocol": "all",
+                        "target": "SNAT",
+                        "source_ip": "10.40.40.0/24",
+                        "output_interface": "eth1",
+                    }
+                }
+            )
+
+    def test_sync_snat_forward_rules_installs_filter_jump(self):
+        calls = []
+        rule = {
+            "chain": "POSTROUTING",
+            "protocol": "tcp",
+            "target": "MASQUERADE",
+            "source_ip": "Null",
+            "output_interface": "eth1",
+            "probability": None,
+        }
+
+        def fake_run_iptables(args, check=True):
+            calls.append(args)
+            if args == ["-t", "filter", "-C", "FORWARD", "-j", ona_app.MANAGED_FORWARD_CHAIN]:
+                return SimpleNamespace(returncode=1, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(ona_app, "run_iptables", side_effect=fake_run_iptables):
+            ona_app.sync_snat_forward_rules([rule], {"enabled": False})
+
+        self.assertIn(
+            ["-t", "filter", "-I", "FORWARD", "1", "-j", ona_app.MANAGED_FORWARD_CHAIN],
+            calls,
+        )
+        self.assertIn(["-t", "filter", "-F", ona_app.MANAGED_FORWARD_CHAIN], calls)
+        self.assertIn(
+            [
+                "-t",
+                "filter",
+                "-A",
+                ona_app.MANAGED_FORWARD_CHAIN,
+                "-p",
+                "tcp",
+                "-o",
+                "eth1",
+                "-j",
+                "ACCEPT",
+            ],
+            calls,
+        )
+
+    def test_snat_pool_builds_forward_accept_rules(self):
+        pool = {
+            "enabled": True,
+            "source_ips": ["10.0.0.10"],
+            "sources": ona_app.decorate_snat_pool_sources(
+                [{"ip": "10.0.0.10", "interface": "eth1"}]
+            ),
+        }
+
+        commands = ona_app.snat_pool_forward_commands(pool, ona_app.MANAGED_FORWARD_CHAIN)
+
+        self.assertIn(
+            ["-t", "filter", "-A", ona_app.MANAGED_FORWARD_CHAIN, "-o", "eth1", "-j", "ACCEPT"],
+            commands,
+        )
+        self.assertIn(
+            [
+                "-t",
+                "filter",
+                "-A",
+                ona_app.MANAGED_FORWARD_CHAIN,
+                "-i",
+                "eth1",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-j",
+                "ACCEPT",
+            ],
+            commands,
+        )
+
 
 class BackupObjectTests(unittest.TestCase):
     def test_backup_object_allowed_can_require_prefix(self):

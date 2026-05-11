@@ -51,6 +51,7 @@ To run ONA as a docker container run:
     ONA_SECRET_KEY=$(openssl rand -hex 32)
 
     docker run --network host --privileged -d --restart always \
+      -v /lib/modules:/lib/modules:ro \
       -v ona-config:/ONA/flask/instance \
       -e ORACLE_CLIENT_ID="$ORACLE_CLIENT_ID" \
       -e ORACLE_IDCS_SECRET="$ORACLE_IDCS_SECRET" \
@@ -64,6 +65,8 @@ Use an HTTPS `ADDRESS` when TLS is terminated in front of the container. The OCI
 If `/login/callback` logs `InsecureTransportError: OAuth 2 MUST utilize https`, Flask is receiving the callback as HTTP. Fix the public URL and redirect URL to use HTTPS, or make sure your reverse proxy/load balancer forwards `X-Forwarded-Proto: https`.
 
 For lab-only direct Flask HTTP deployments, set `ADDRESS=http://IP_OR_DNS_OF_THE_NODE:5000`, add `-e OAUTHLIB_INSECURE_TRANSPORT=1` to `docker run`, and configure the OCI redirect URL as `http://IP_OR_DNS_OF_THE_NODE:5000/login/callback`.
+
+The `iptables` and `nftables` packages install user-space tools, not kernel modules. The container uses host networking and host netfilter state, so kernel modules must be available on the Docker host. Keep the `/lib/modules` mount in the `docker run` command above if you want the container entrypoint to load netfilter modules, or load them on the host before starting ONA.
 
 ## Step 7: Optional Object Storage Backups
 The Backups panel in the UI can list Object Storage buckets, create zip backups of the ONA-managed iptables rules, schedule recurring backups, and restore a selected backup.
