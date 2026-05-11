@@ -383,6 +383,69 @@ class ConfigTests(unittest.TestCase):
         warning.assert_called_once()
 
 
+class NatPortCapacityTests(unittest.TestCase):
+    def test_read_port_capacity_does_not_double_tcp_and_udp(self):
+        with mock.patch("builtins.open", mock.mock_open(read_data="10000 65000\n")):
+            capacity = ona_app.read_port_capacity()
+
+        self.assertEqual(capacity["per_ip_total"], 55001)
+        self.assertEqual(capacity["per_protocol"], 55001)
+        self.assertEqual(capacity["max_per_ip"], 65535)
+
+    def test_estimated_snat_capacity_counts_one_port_space_per_source_ip(self):
+        with mock.patch.object(
+            ona_app,
+            "snat_pool_policy",
+            return_value={"enabled": True, "source_ips": ["10.0.0.10", "10.0.0.11"]},
+        ), mock.patch.object(
+            ona_app,
+            "read_port_capacity",
+            return_value={"per_ip_total": 55001},
+        ):
+            capacity = ona_app.estimated_snat_capacity()
+
+        self.assertEqual(capacity["source_ip_count"], 2)
+        self.assertEqual(capacity["per_ip_ports"], 55001)
+        self.assertEqual(capacity["total_available_ports"], 110002)
+
+    def test_conntrack_metrics_counts_unique_ports_once_across_protocols(self):
+        previous_sample = ona_app._last_conntrack_sample
+        ona_app._last_conntrack_sample = None
+        try:
+            with mock.patch.object(ona_app, "read_first_int", return_value=1000), mock.patch.object(
+                ona_app,
+                "parse_conntrack_lines",
+                return_value=[
+                    "ipv4 2 tcp 6 300 ESTABLISHED src=10.0.0.2 dst=198.51.100.10 sport=12345 dport=443\n",
+                    "ipv4 2 udp 17 30 src=10.0.0.2 dst=198.51.100.10 sport=12345 dport=53\n",
+                ],
+            ), mock.patch.object(
+                ona_app,
+                "read_port_capacity",
+                return_value={
+                    "range_start": 1,
+                    "range_end": 65535,
+                    "usable_range_start": 1,
+                    "usable_range_end": 65535,
+                    "per_protocol": 65535,
+                    "per_ip_total": 65535,
+                    "max_per_ip": 65535,
+                },
+            ), mock.patch.object(
+                ona_app,
+                "snat_pool_policy",
+                return_value={"enabled": False, "source_ips": []},
+            ):
+                metrics = ona_app.conntrack_metrics()
+        finally:
+            ona_app._last_conntrack_sample = previous_sample
+
+        self.assertEqual(metrics["ports_in_use_by_protocol"], {"tcp": 1, "udp": 1})
+        self.assertEqual(metrics["ports_in_use"], 1)
+        self.assertEqual(metrics["total_available_ports"], 65535)
+        self.assertEqual(metrics["available_ports"], 65534)
+
+
 class DashboardHistoryTests(unittest.TestCase):
     def setUp(self):
         self.previous_history = ona_app._dashboard_history

@@ -97,6 +97,7 @@ SNAT_POOL_MARK_BASE = 0x4F4E0000
 SNAT_POOL_TABLE_BASE = 30000
 SNAT_POOL_RULE_PRIORITY_BASE = 30000
 SNAT_POOL_MAX_SOURCES = 256
+MAX_SOURCE_PORTS_PER_IP = 65535
 ALLOWED_DNAT_PROTOCOLS = {"tcp", "udp"}
 ALLOWED_SNAT_PROTOCOLS = {"all", "tcp", "udp"}
 ALLOWED_SNAT_TARGETS = {"MASQUERADE", "SNAT"}
@@ -1965,8 +1966,8 @@ def estimated_snat_capacity():
     port_capacity = read_port_capacity()
     return {
         "source_ip_count": max(1, source_count),
-        "total_available_ports": port_capacity["tcp_udp_total"] * max(1, source_count),
-        "per_ip_ports": port_capacity["tcp_udp_total"],
+        "total_available_ports": port_capacity["per_ip_total"] * max(1, source_count),
+        "per_ip_ports": port_capacity["per_ip_total"],
     }
 
 
@@ -2114,12 +2115,17 @@ def read_port_capacity():
     except (OSError, ValueError, IndexError):
         start, end = 32768, 60999
 
-    per_protocol = max(0, end - start + 1)
+    usable_start = max(1, start)
+    usable_end = min(MAX_SOURCE_PORTS_PER_IP, end)
+    per_ip_total = max(0, usable_end - usable_start + 1)
     return {
         "range_start": start,
         "range_end": end,
-        "per_protocol": per_protocol,
-        "tcp_udp_total": per_protocol * 2,
+        "usable_range_start": usable_start,
+        "usable_range_end": usable_end,
+        "per_protocol": per_ip_total,
+        "per_ip_total": per_ip_total,
+        "max_per_ip": MAX_SOURCE_PORTS_PER_IP,
     }
 
 
@@ -2178,8 +2184,8 @@ def conntrack_metrics():
         protocol: len(ports)
         for protocol, ports in ports_by_protocol.items()
     }
-    ports_in_use = sum(ports_in_use_by_protocol.values())
-    total_available_ports = port_capacity["tcp_udp_total"] * source_ip_count
+    ports_in_use = len(set().union(*ports_by_protocol.values()))
+    total_available_ports = port_capacity["per_ip_total"] * source_ip_count
     utilization = round((ports_in_use / total_available_ports) * 100, 2) if total_available_ports else 0
     connection_utilization = (
         round((total_connections / max_connections) * 100, 2)
@@ -2202,7 +2208,11 @@ def conntrack_metrics():
         "ephemeral_port_range": {
             "start": port_capacity["range_start"],
             "end": port_capacity["range_end"],
+            "usable_start": port_capacity["usable_range_start"],
+            "usable_end": port_capacity["usable_range_end"],
             "per_protocol": port_capacity["per_protocol"],
+            "per_ip_total": port_capacity["per_ip_total"],
+            "max_per_ip": port_capacity["max_per_ip"],
         },
     }
 
