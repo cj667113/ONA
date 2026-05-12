@@ -18,46 +18,64 @@
 
   <div class="metric-grid">
     <div class="metric-tile">
-      <div class="metric-label">CPU</div>
-      <div class="metric-value" id="metric-cpu-percent">-</div>
-      <div class="metric-subtext" id="metric-cpu-load">Load -</div>
-      <div class="progress metric-progress mt-2">
-        <div id="metric-cpu-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+      <div class="metric-tile-head">
+        <div>
+          <div class="metric-label">CPU</div>
+          <div class="metric-value" id="metric-cpu-percent">-</div>
+        </div>
+        <div class="metric-subtext" id="metric-cpu-load">Load -</div>
       </div>
+      <svg id="spark-cpu" class="metric-sparkline" role="img" aria-label="CPU trend"></svg>
     </div>
     <div class="metric-tile">
-      <div class="metric-label">Memory</div>
-      <div class="metric-value" id="metric-memory-percent">-</div>
-      <div class="metric-subtext" id="metric-memory-detail">- used</div>
-      <div class="progress metric-progress mt-2">
-        <div id="metric-memory-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+      <div class="metric-tile-head">
+        <div>
+          <div class="metric-label">Memory</div>
+          <div class="metric-value" id="metric-memory-percent">-</div>
+        </div>
+        <div class="metric-subtext" id="metric-memory-detail">- used</div>
       </div>
+      <svg id="spark-memory" class="metric-sparkline" role="img" aria-label="Memory trend"></svg>
     </div>
     <div class="metric-tile">
-      <div class="metric-label">NAT Ports</div>
-      <div class="metric-value" id="metric-ports-used">-</div>
-      <div class="metric-subtext" id="metric-ports-detail">- available</div>
-      <div class="progress metric-progress mt-2">
-        <div id="metric-ports-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+      <div class="metric-tile-head">
+        <div>
+          <div class="metric-label">NAT Ports</div>
+          <div class="metric-value" id="metric-ports-used">-</div>
+        </div>
+        <div class="metric-subtext" id="metric-ports-detail">- available</div>
       </div>
+      <svg id="spark-ports" class="metric-sparkline" role="img" aria-label="NAT port usage trend"></svg>
     </div>
     <div class="metric-tile">
-      <div class="metric-label">Connections</div>
-      <div class="metric-value" id="metric-connections-total">-</div>
-      <div class="metric-subtext" id="metric-conn-rate">- conn/sec</div>
-      <div class="progress metric-progress mt-2">
-        <div id="metric-connections-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+      <div class="metric-tile-head">
+        <div>
+          <div class="metric-label">Connections</div>
+          <div class="metric-value" id="metric-connections-total">-</div>
+        </div>
+        <div class="metric-subtext" id="metric-conn-rate">- conn/sec</div>
       </div>
+      <svg id="spark-connections" class="metric-sparkline" role="img" aria-label="Connection count trend"></svg>
     </div>
     <div class="metric-tile wide">
-      <div class="metric-label">Network Throughput</div>
-      <div class="metric-value" id="metric-throughput-bytes">-</div>
-      <div class="metric-subtext" id="metric-throughput-detail">RX - / TX -</div>
+      <div class="metric-tile-head">
+        <div>
+          <div class="metric-label">Network Throughput</div>
+          <div class="metric-value" id="metric-throughput-bytes">-</div>
+        </div>
+        <div class="metric-subtext" id="metric-throughput-detail">RX - / TX -</div>
+      </div>
+      <svg id="spark-network" class="metric-sparkline" role="img" aria-label="Network throughput trend"></svg>
     </div>
     <div class="metric-tile wide">
-      <div class="metric-label">Packet Throughput</div>
-      <div class="metric-value" id="metric-throughput-packets">-</div>
-      <div class="metric-subtext" id="metric-rule-counts">DNAT - / SNAT -</div>
+      <div class="metric-tile-head">
+        <div>
+          <div class="metric-label">Packet Throughput</div>
+          <div class="metric-value" id="metric-throughput-packets">-</div>
+        </div>
+        <div class="metric-subtext" id="metric-rule-counts">DNAT - / SNAT -</div>
+      </div>
+      <svg id="spark-packets" class="metric-sparkline" role="img" aria-label="Packet throughput trend"></svg>
     </div>
   </div>
 

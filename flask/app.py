@@ -98,6 +98,22 @@ SNAT_POOL_TABLE_BASE = 30000
 SNAT_POOL_RULE_PRIORITY_BASE = 30000
 SNAT_POOL_MAX_SOURCES = 256
 MAX_SOURCE_PORTS_PER_IP = 65535
+SNAT_FORWARDING_SYSCTLS = {
+    "/proc/sys/net/ipv4/ip_local_port_range": "1024 65535",
+    "/proc/sys/net/ipv4/tcp_fin_timeout": "15",
+    "/proc/sys/net/ipv4/tcp_tw_reuse": "1",
+    "/proc/sys/net/ipv4/tcp_max_syn_backlog": "262144",
+    "/proc/sys/net/core/somaxconn": "262144",
+    "/proc/sys/net/core/netdev_max_backlog": "250000",
+    "/proc/sys/net/netfilter/nf_conntrack_max": "2097152",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_syn_sent": "30",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_syn_recv": "30",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established": "7200",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_fin_wait": "30",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close_wait": "30",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_last_ack": "30",
+    "/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_time_wait": "15",
+}
 ALLOWED_DNAT_PROTOCOLS = {"tcp", "udp"}
 ALLOWED_SNAT_PROTOCOLS = {"all", "tcp", "udp"}
 ALLOWED_SNAT_TARGETS = {"MASQUERADE", "SNAT"}
@@ -625,6 +641,8 @@ def sync_snat_forward_rules(rules=None, pool=None):
 
 def configure_snat_forwarding_sysctls(interfaces):
     write_proc_value("/proc/sys/net/ipv4/ip_forward", "1")
+    for path, value in SNAT_FORWARDING_SYSCTLS.items():
+        write_optional_proc_value(path, value)
     for name in ("all", "default", *sorted(set(interfaces))):
         path = f"/proc/sys/net/ipv4/conf/{name}/rp_filter"
         if os.path.exists(path):
@@ -1891,6 +1909,15 @@ def write_proc_value(path, value):
             proc_file.write(str(value))
     except OSError as exc:
         raise RuntimeError(f"Unable to write {path}: {exc}") from exc
+
+
+def write_optional_proc_value(path, value):
+    if not os.path.exists(path):
+        return
+    try:
+        write_proc_value(path, value)
+    except RuntimeError as exc:
+        app.logger.warning("Unable to apply optional SNAT sysctl %s: %s", path, exc)
 
 
 def configure_snat_pool_sysctls(pool):

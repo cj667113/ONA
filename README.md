@@ -37,9 +37,9 @@ Run this from the repository root:
 
     docker build --no-cache -t ona .
 
-If your shell is already inside the `docker/` directory, keep the repository root as the build context:
+If your shell is already inside the `docker/` directory, use the repository-root Dockerfile and keep the repository root as the build context:
 
-    docker build --no-cache -f Dockerfile -t ona ..
+    docker build --no-cache -f ../Dockerfile -t ona ..
 
 ## Step 6: Run Docker Container
 To run ONA as a docker container run:

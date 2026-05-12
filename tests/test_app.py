@@ -308,6 +308,27 @@ class SnatPoolTests(unittest.TestCase):
             commands,
         )
 
+    def test_snat_forwarding_sysctls_tune_conntrack_and_forwarding(self):
+        existing_paths = {
+            "/proc/sys/net/ipv4/conf/all/rp_filter",
+            "/proc/sys/net/ipv4/conf/default/rp_filter",
+            "/proc/sys/net/ipv4/conf/eth1/rp_filter",
+            "/proc/sys/net/netfilter/nf_conntrack_max",
+        }
+
+        with mock.patch.object(
+            ona_app.os.path,
+            "exists",
+            side_effect=lambda path: path in existing_paths,
+        ), mock.patch.object(ona_app, "write_proc_value") as write_proc:
+            ona_app.configure_snat_forwarding_sysctls(["eth1"])
+
+        write_proc.assert_any_call("/proc/sys/net/ipv4/ip_forward", "1")
+        write_proc.assert_any_call("/proc/sys/net/netfilter/nf_conntrack_max", "2097152")
+        write_proc.assert_any_call("/proc/sys/net/ipv4/conf/all/rp_filter", "0")
+        write_proc.assert_any_call("/proc/sys/net/ipv4/conf/default/rp_filter", "0")
+        write_proc.assert_any_call("/proc/sys/net/ipv4/conf/eth1/rp_filter", "0")
+
 
 class BackupObjectTests(unittest.TestCase):
     def test_backup_object_allowed_can_require_prefix(self):

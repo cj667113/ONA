@@ -1094,17 +1094,6 @@ function setText(id, value) {
   }
 }
 
-function setProgress(id, value) {
-  var element = document.getElementById(id);
-  if (!element) {
-    return;
-  }
-  var percent = Number(value || 0);
-  percent = Math.max(0, Math.min(100, percent));
-  element.style.width = percent + "%";
-  element.setAttribute("aria-valuenow", percent);
-}
-
 function formatPercent(value) {
   if (value === null || value === undefined) {
     return "-";
@@ -1177,6 +1166,8 @@ var dashboardChartDefinitions = [
   {
     id: "cpu",
     yLabel: "CPU %",
+    color: "#2563eb",
+    areaColor: "#dbeafe",
     format: formatPercent,
     tickFormat: formatPercentTick,
     min: 0,
@@ -1188,6 +1179,8 @@ var dashboardChartDefinitions = [
   {
     id: "memory",
     yLabel: "Memory %",
+    color: "#0f766e",
+    areaColor: "#ccfbf1",
     format: formatPercent,
     tickFormat: formatPercentTick,
     min: 0,
@@ -1199,6 +1192,8 @@ var dashboardChartDefinitions = [
   {
     id: "ports",
     yLabel: "Ports used",
+    color: "#b45309",
+    areaColor: "#fef3c7",
     format: formatNumber,
     tickFormat: formatCompactNumber,
     value: function (sample) {
@@ -1208,6 +1203,8 @@ var dashboardChartDefinitions = [
   {
     id: "connections",
     yLabel: "Connections",
+    color: "#4338ca",
+    areaColor: "#e0e7ff",
     format: formatNumber,
     tickFormat: formatCompactNumber,
     value: function (sample) {
@@ -1217,6 +1214,8 @@ var dashboardChartDefinitions = [
   {
     id: "network",
     yLabel: "Bytes/s",
+    color: "#15803d",
+    areaColor: "#dcfce7",
     format: formatRateBytes,
     tickFormat: formatByteRateTick,
     value: function (sample) {
@@ -1227,6 +1226,8 @@ var dashboardChartDefinitions = [
   {
     id: "packets",
     yLabel: "Packets/s",
+    color: "#475569",
+    areaColor: "#e2e8f0",
     format: formatRatePackets,
     tickFormat: formatPacketRateTick,
     value: function (sample) {
@@ -1406,6 +1407,156 @@ function chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHei
   };
 }
 
+function chartValues(definition, samples, xMin) {
+  return samples.map(function (sample) {
+    return { epoch: sampleEpoch(sample), value: definition.value(sample) };
+  }).filter(function (point) {
+    return point.epoch !== null && point.value !== null && point.epoch >= xMin;
+  });
+}
+
+function smoothPath(points) {
+  if (!points.length) {
+    return "";
+  }
+  if (points.length === 1) {
+    return "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+  }
+
+  var path = "M " + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+  for (let index = 1; index < points.length; index++) {
+    var previous = points[index - 1];
+    var current = points[index];
+    var midX = (previous.x + current.x) / 2;
+    path += " C " + midX.toFixed(1) + " " + previous.y.toFixed(1);
+    path += " " + midX.toFixed(1) + " " + current.y.toFixed(1);
+    path += " " + current.x.toFixed(1) + " " + current.y.toFixed(1);
+  }
+  return path;
+}
+
+function areaPath(points, baselineY) {
+  if (points.length < 2) {
+    return "";
+  }
+  var linePath = smoothPath(points);
+  var first = points[0];
+  var last = points[points.length - 1];
+  return linePath + " L " + last.x.toFixed(1) + " " + baselineY.toFixed(1) +
+    " L " + first.x.toFixed(1) + " " + baselineY.toFixed(1) + " Z";
+}
+
+function appendAreaGradient(svg, gradientId, definition, topOpacity, bottomOpacity) {
+  var defs = svgNode("defs");
+  var gradient = svgNode("linearGradient", {
+    id: gradientId,
+    x1: "0",
+    y1: "0",
+    x2: "0",
+    y2: "1",
+  });
+  gradient.appendChild(svgNode("stop", {
+    offset: "0%",
+    "stop-color": definition.areaColor || definition.color || "#dbeafe",
+    "stop-opacity": topOpacity,
+  }));
+  gradient.appendChild(svgNode("stop", {
+    offset: "100%",
+    "stop-color": definition.areaColor || definition.color || "#dbeafe",
+    "stop-opacity": bottomOpacity,
+  }));
+  defs.appendChild(gradient);
+  svg.appendChild(defs);
+}
+
+function chartCoordinates(values, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight) {
+  return values.map(function (point) {
+    return chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
+  });
+}
+
+function dynamicYMax(definition, yMin, observedMax) {
+  if (definition.max !== undefined) {
+    return definition.max;
+  }
+  var ticks = chartTicks(yMin, observedMax);
+  return ticks[ticks.length - 1] > yMin ? ticks[ticks.length - 1] : yMin + 1;
+}
+
+function renderMetricSparkline(definition, samples) {
+  var svg = document.getElementById("spark-" + definition.id);
+  if (!svg) {
+    return;
+  }
+
+  var bounds = svg.getBoundingClientRect();
+  var width = Math.max(180, Math.round(bounds.width || svg.clientWidth || 280));
+  var height = Math.max(72, Math.round(bounds.height || svg.clientHeight || 82));
+  var now = Date.now() / 1000;
+  var xMin = now - dashboardRangeSeconds;
+  var xMax = now;
+  var values = chartValues(definition, samples, xMin);
+  var yMin = definition.min !== undefined ? definition.min : 0;
+  var observedMax = values.reduce(function (maxValue, point) {
+    return Math.max(maxValue, point.value);
+  }, yMin);
+  var yMax = dynamicYMax(definition, yMin, observedMax);
+  var left = 4;
+  var right = 4;
+  var top = 8;
+  var bottom = 10;
+  var plotWidth = Math.max(80, width - left - right);
+  var plotHeight = Math.max(50, height - top - bottom);
+
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  svg.setAttribute("preserveAspectRatio", "none");
+
+  if (values.length < 2) {
+    appendChartText(svg, {
+      x: width / 2,
+      y: top + plotHeight / 2 + 4,
+      "text-anchor": "middle",
+      class: "spark-empty",
+    }, "Collecting data");
+    return;
+  }
+
+  var points = chartCoordinates(values, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
+  var gradientId = "spark-" + definition.id + "-area-gradient";
+  appendAreaGradient(svg, gradientId, definition, "0.7", "0.05");
+  svg.appendChild(svgNode("path", {
+    d: areaPath(points, top + plotHeight),
+    class: "spark-area",
+    fill: "url(#" + gradientId + ")",
+  }));
+
+  for (let index = 1; index <= 2; index++) {
+    var gridY = top + (plotHeight / 3) * index;
+    svg.appendChild(svgNode("line", {
+      x1: left,
+      y1: gridY,
+      x2: width - right,
+      y2: gridY,
+      class: "spark-grid-line",
+    }));
+  }
+
+  svg.appendChild(svgNode("path", {
+    d: smoothPath(points),
+    class: "spark-line",
+    stroke: definition.color,
+  }));
+  var last = points[points.length - 1];
+  svg.appendChild(svgNode("circle", {
+    cx: last.x,
+    cy: last.y,
+    r: 4.5,
+    class: "spark-endpoint",
+    fill: definition.color,
+  }));
+}
+
 function renderMetricChart(definition, samples) {
   var svg = document.getElementById("chart-" + definition.id);
   if (!svg) {
@@ -1418,11 +1569,7 @@ function renderMetricChart(definition, samples) {
   var now = Date.now() / 1000;
   var xMin = now - dashboardRangeSeconds;
   var xMax = now;
-  var values = samples.map(function (sample) {
-    return { epoch: sampleEpoch(sample), value: definition.value(sample) };
-  }).filter(function (point) {
-    return point.epoch !== null && point.value !== null && point.epoch >= xMin;
-  });
+  var values = chartValues(definition, samples, xMin);
   var yMin = definition.min !== undefined ? definition.min : 0;
   var observedMax = values.reduce(function (maxValue, point) {
     return Math.max(maxValue, point.value);
@@ -1446,6 +1593,18 @@ function renderMetricChart(definition, samples) {
   svg.replaceChildren();
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
   svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
+  var gradientId = "chart-" + definition.id + "-area-gradient";
+  appendAreaGradient(svg, gradientId, definition, "0.55", "0.03");
+
+  var points = [];
+  if (values.length >= 2) {
+    points = chartCoordinates(values, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
+    svg.appendChild(svgNode("path", {
+      d: areaPath(points, height - bottom),
+      class: "chart-area",
+      fill: "url(#" + gradientId + ")",
+    }));
+  }
 
   for (let index = 0; index < ticks.length; index++) {
     var tickValue = ticks[index];
@@ -1484,16 +1643,25 @@ function renderMetricChart(definition, samples) {
     return;
   }
 
-  var points = values.map(function (point) {
-    var coordinates = chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
-    return coordinates.x.toFixed(1) + "," + coordinates.y.toFixed(1);
-  }).join(" ");
-  svg.appendChild(svgNode("polyline", { points: points, class: "chart-line" }));
+  svg.appendChild(svgNode("path", {
+    d: smoothPath(points),
+    class: "chart-line",
+    stroke: definition.color,
+  }));
+  var last = points[points.length - 1];
+  svg.appendChild(svgNode("circle", {
+    cx: last.x,
+    cy: last.y,
+    r: 5,
+    class: "chart-endpoint",
+    fill: definition.color,
+  }));
 }
 
 function renderDashboardCharts() {
   var samples = filteredDashboardHistory();
   for (let definition of dashboardChartDefinitions) {
+    renderMetricSparkline(definition, samples);
     renderMetricChart(definition, samples);
   }
 }
@@ -1510,20 +1678,16 @@ function renderDashboardStats(data) {
   setText("metric-cpu-load", data.cpu && data.cpu.load_average && data.cpu.load_average.length
     ? "Load " + data.cpu.load_average.join(" / ")
     : "Load -");
-  setProgress("metric-cpu-bar", cpuPercent || 0);
 
   setText("metric-memory-percent", formatPercent(memory.percent));
   setText("metric-memory-detail", formatBytes(memory.used_bytes) + " / " + formatBytes(memory.total_bytes));
-  setProgress("metric-memory-bar", memory.percent || 0);
 
   setText("metric-ports-used", formatNumber(nat.ports_in_use) + " used");
   setText("metric-ports-detail", formatNumber(nat.available_ports) + " available of " +
     formatNumber(nat.total_available_ports) + " across " + formatNumber(nat.snat_source_ip_count || 1) + " IPs");
-  setProgress("metric-ports-bar", nat.port_utilization_percent || 0);
 
   setText("metric-connections-total", formatNumber(nat.total_connections));
   setText("metric-conn-rate", Number(nat.connections_per_second || 0).toFixed(2) + " conn/s");
-  setProgress("metric-connections-bar", nat.connection_utilization_percent || 0);
 
   setText("metric-throughput-bytes", formatRateBytes(rates.total_bytes_per_second));
   setText("metric-throughput-detail", "RX " + formatRateBytes(rates.rx_bytes_per_second) + " / TX " + formatRateBytes(rates.tx_bytes_per_second));

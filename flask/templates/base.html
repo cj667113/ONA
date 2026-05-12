@@ -193,9 +193,23 @@
     .metric-tile {
       border: 1px solid var(--ona-border-soft);
       border-radius: 8px;
-      min-height: 104px;
-      padding: 16px;
-      background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+      min-height: 174px;
+      padding: 16px 16px 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .metric-tile-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      min-width: 0;
     }
 
     .metric-label {
@@ -206,24 +220,63 @@
     }
 
     .metric-value {
-      font-size: 1.4rem;
+      font-size: 1.45rem;
       line-height: 1.2;
-      font-weight: 600;
+      font-weight: 700;
+      color: #111827;
+      white-space: nowrap;
     }
 
     .metric-subtext {
       color: var(--ona-muted);
       font-size: 0.82rem;
       min-height: 1.2rem;
+      text-align: right;
+      max-width: 52%;
+      overflow-wrap: anywhere;
     }
 
-    .metric-progress {
-      height: 0.35rem;
-      background-color: #e8edf3;
+    .metric-sparkline {
+      display: block;
+      width: 100%;
+      height: 82px;
+      margin-top: auto;
+      overflow: visible;
     }
 
-    .metric-progress .progress-bar {
-      background-color: var(--ona-primary);
+    .metric-grid .wide .metric-sparkline {
+      height: 90px;
+    }
+
+    .spark-grid-line {
+      stroke: #dce6ef;
+      stroke-width: 1;
+    }
+
+    .spark-area,
+    .chart-area {
+      pointer-events: none;
+    }
+
+    .spark-line {
+      fill: none;
+      stroke-width: 2.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      filter: drop-shadow(0 4px 8px rgba(15, 23, 42, 0.12));
+    }
+
+    .spark-endpoint,
+    .chart-endpoint {
+      stroke: #ffffff;
+      stroke-width: 3;
+      filter: drop-shadow(0 3px 6px rgba(15, 23, 42, 0.16));
+    }
+
+    .spark-empty {
+      fill: var(--ona-muted);
+      font-size: 12px;
+      font-weight: 600;
     }
 
     .chart-toolbar {
@@ -253,7 +306,8 @@
       border: 1px solid var(--ona-border-soft);
       border-radius: 8px;
       padding: 16px 18px 14px;
-      background: #ffffff;
+      background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
       min-width: 0;
     }
 
@@ -267,26 +321,26 @@
     .metric-chart {
       display: block;
       width: 100%;
-      height: 270px;
+      height: 290px;
       overflow: visible;
     }
 
     .chart-axis,
     .chart-grid-line {
-      stroke: #d8e2ee;
+      stroke: #dbe5ef;
       stroke-width: 1;
     }
 
     .chart-grid-line {
-      stroke-dasharray: 3 4;
+      stroke-dasharray: 4 6;
     }
 
     .chart-line {
       fill: none;
-      stroke: var(--ona-primary);
-      stroke-width: 2.75;
+      stroke-width: 3.2;
       stroke-linejoin: round;
       stroke-linecap: round;
+      filter: drop-shadow(0 5px 10px rgba(15, 23, 42, 0.12));
     }
 
     .chart-axis-text {
@@ -483,6 +537,16 @@
       .chart-grid,
       .source-controls-grid {
         grid-template-columns: 1fr;
+      }
+
+      .metric-tile-head {
+        display: block;
+      }
+
+      .metric-subtext {
+        max-width: 100%;
+        text-align: left;
+        margin-top: 4px;
       }
 
       .chart-toolbar {
