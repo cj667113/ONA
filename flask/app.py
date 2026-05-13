@@ -128,7 +128,7 @@ ALLOWED_BACKUP_SCHEDULES = {"manual", "hourly", "daily", "weekly"}
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 DEFAULT_BACKUP_PREFIX = "ona-backups/"
 DEFAULT_BACKUP_RETENTION = 30
-DASHBOARD_REFRESH_SECONDS = 5
+DASHBOARD_REFRESH_SECONDS = 15
 IMDS_VNICS_URL = "http://169.254.169.254/opc/v2/vnics/"
 
 _provider_cache = {}
