@@ -12,8 +12,10 @@ let backupsView = document.getElementById("backups-view");
 let dashboardPollTimer = null;
 let dashboardHistory = [];
 let dashboardRangeSeconds = 3600;
+let dashboardRefreshMilliseconds = 5000;
 let dashboardChartResizeTimer = null;
 let dashboardChartResizeListenerAttached = false;
+let dashboardCrcTable = null;
 let snatInterfaceOptions = [];
 let submitToastTimer = null;
 
@@ -1165,6 +1167,7 @@ function numberOrNull(value) {
 var dashboardChartDefinitions = [
   {
     id: "cpu",
+    label: "CPU",
     yLabel: "CPU %",
     color: "#2563eb",
     areaColor: "#dbeafe",
@@ -1178,6 +1181,7 @@ var dashboardChartDefinitions = [
   },
   {
     id: "memory",
+    label: "Memory",
     yLabel: "Memory %",
     color: "#0f766e",
     areaColor: "#ccfbf1",
@@ -1191,6 +1195,7 @@ var dashboardChartDefinitions = [
   },
   {
     id: "ports",
+    label: "NAT Ports",
     yLabel: "Ports used",
     color: "#b45309",
     areaColor: "#fef3c7",
@@ -1202,6 +1207,7 @@ var dashboardChartDefinitions = [
   },
   {
     id: "connections",
+    label: "Connections",
     yLabel: "Connections",
     color: "#4338ca",
     areaColor: "#e0e7ff",
@@ -1213,6 +1219,7 @@ var dashboardChartDefinitions = [
   },
   {
     id: "network",
+    label: "Network Throughput",
     yLabel: "Bytes/s",
     color: "#15803d",
     areaColor: "#dcfce7",
@@ -1225,6 +1232,7 @@ var dashboardChartDefinitions = [
   },
   {
     id: "packets",
+    label: "Packet Throughput",
     yLabel: "Packets/s",
     color: "#475569",
     areaColor: "#e2e8f0",
@@ -1328,6 +1336,16 @@ function formatChartTime(epoch) {
     return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric" });
   }
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatChartTooltipTime(epoch) {
+  return new Date(epoch * 1000).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function niceChartNumber(value, round) {
@@ -1471,90 +1489,148 @@ function appendAreaGradient(svg, gradientId, definition, topOpacity, bottomOpaci
 
 function chartCoordinates(values, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight) {
   return values.map(function (point) {
-    return chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
+    var coordinates = chartPoint(point, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
+    return {
+      epoch: point.epoch,
+      value: point.value,
+      x: coordinates.x,
+      y: coordinates.y,
+    };
   });
 }
 
-function dynamicYMax(definition, yMin, observedMax) {
-  if (definition.max !== undefined) {
-    return definition.max;
+function svgEventPoint(svg, event) {
+  var matrix = svg.getScreenCTM();
+  if (!matrix) {
+    return null;
   }
-  var ticks = chartTicks(yMin, observedMax);
-  return ticks[ticks.length - 1] > yMin ? ticks[ticks.length - 1] : yMin + 1;
+  var point = svg.createSVGPoint();
+  point.x = event.clientX;
+  point.y = event.clientY;
+  return point.matrixTransform(matrix.inverse());
 }
 
-function renderMetricSparkline(definition, samples) {
-  var svg = document.getElementById("spark-" + definition.id);
-  if (!svg) {
-    return;
+function nearestChartPoint(points, x) {
+  var nearest = points[0];
+  var nearestDistance = Math.abs(points[0].x - x);
+  for (let index = 1; index < points.length; index++) {
+    var distance = Math.abs(points[index].x - x);
+    if (distance < nearestDistance) {
+      nearest = points[index];
+      nearestDistance = distance;
+    }
   }
+  return nearest;
+}
 
-  var bounds = svg.getBoundingClientRect();
-  var width = Math.max(180, Math.round(bounds.width || svg.clientWidth || 280));
-  var height = Math.max(72, Math.round(bounds.height || svg.clientHeight || 82));
-  var now = Date.now() / 1000;
-  var xMin = now - dashboardRangeSeconds;
-  var xMax = now;
-  var values = chartValues(definition, samples, xMin);
-  var yMin = definition.min !== undefined ? definition.min : 0;
-  var observedMax = values.reduce(function (maxValue, point) {
-    return Math.max(maxValue, point.value);
-  }, yMin);
-  var yMax = dynamicYMax(definition, yMin, observedMax);
-  var left = 4;
-  var right = 4;
-  var top = 8;
-  var bottom = 10;
-  var plotWidth = Math.max(80, width - left - right);
-  var plotHeight = Math.max(50, height - top - bottom);
-
-  svg.replaceChildren();
-  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-  svg.setAttribute("preserveAspectRatio", "none");
-
-  if (values.length < 2) {
-    appendChartText(svg, {
-      x: width / 2,
-      y: top + plotHeight / 2 + 4,
-      "text-anchor": "middle",
-      class: "spark-empty",
-    }, "Collecting data");
-    return;
-  }
-
-  var points = chartCoordinates(values, xMin, xMax, yMin, yMax, left, top, plotWidth, plotHeight);
-  var gradientId = "spark-" + definition.id + "-area-gradient";
-  appendAreaGradient(svg, gradientId, definition, "0.7", "0.05");
-  svg.appendChild(svgNode("path", {
-    d: areaPath(points, top + plotHeight),
-    class: "spark-area",
-    fill: "url(#" + gradientId + ")",
-  }));
-
-  for (let index = 1; index <= 2; index++) {
-    var gridY = top + (plotHeight / 3) * index;
-    svg.appendChild(svgNode("line", {
-      x1: left,
-      y1: gridY,
-      x2: width - right,
-      y2: gridY,
-      class: "spark-grid-line",
-    }));
-  }
-
-  svg.appendChild(svgNode("path", {
-    d: smoothPath(points),
-    class: "spark-line",
-    stroke: definition.color,
-  }));
-  var last = points[points.length - 1];
-  svg.appendChild(svgNode("circle", {
-    cx: last.x,
-    cy: last.y,
-    r: 4.5,
-    class: "spark-endpoint",
+function appendChartHoverLayer(svg, definition, points, width, height, left, right, top, bottom, plotHeight) {
+  var hoverLayer = svgNode("g", { class: "chart-hover-layer", opacity: "0" });
+  var verticalLine = svgNode("line", {
+    y1: top,
+    y2: top + plotHeight,
+    class: "chart-crosshair",
+  });
+  var horizontalLine = svgNode("line", {
+    x1: left,
+    x2: width - right,
+    class: "chart-crosshair",
+  });
+  var hoverDot = svgNode("circle", {
+    r: 5.5,
+    class: "chart-hover-dot",
     fill: definition.color,
-  }));
+  });
+  var tooltip = svgNode("g", { class: "chart-tooltip" });
+  var tooltipBg = svgNode("rect", {
+    width: 170,
+    height: 70,
+    rx: 7,
+    ry: 7,
+    class: "chart-tooltip-bg",
+  });
+  var tooltipTitle = svgNode("text", { class: "chart-tooltip-title" });
+  var tooltipValue = svgNode("text", { class: "chart-tooltip-value" });
+  var tooltipTime = svgNode("text", { class: "chart-tooltip-time" });
+
+  tooltip.appendChild(tooltipBg);
+  tooltip.appendChild(tooltipTitle);
+  tooltip.appendChild(tooltipValue);
+  tooltip.appendChild(tooltipTime);
+  hoverLayer.appendChild(verticalLine);
+  hoverLayer.appendChild(horizontalLine);
+  hoverLayer.appendChild(hoverDot);
+  hoverLayer.appendChild(tooltip);
+  svg.appendChild(hoverLayer);
+
+  function showPoint(point) {
+    var valueText = definition.format(point.value);
+    var timeText = formatChartTooltipTime(point.epoch);
+    var titleText = definition.label || definition.yLabel;
+    var tooltipWidth = Math.max(
+      166,
+      Math.min(250, Math.max(titleText.length, valueText.length, timeText.length) * 7.4 + 28)
+    );
+    var tooltipHeight = 70;
+    var tooltipX = point.x + 14;
+    var tooltipY = point.y - tooltipHeight - 12;
+
+    if (tooltipX + tooltipWidth > width - 8) {
+      tooltipX = point.x - tooltipWidth - 14;
+    }
+    if (tooltipX < left + 6) {
+      tooltipX = left + 6;
+    }
+    if (tooltipY < top + 4) {
+      tooltipY = point.y + 12;
+    }
+    if (tooltipY + tooltipHeight > height - bottom - 4) {
+      tooltipY = height - bottom - tooltipHeight - 4;
+    }
+
+    verticalLine.setAttribute("x1", point.x);
+    verticalLine.setAttribute("x2", point.x);
+    horizontalLine.setAttribute("y1", point.y);
+    horizontalLine.setAttribute("y2", point.y);
+    hoverDot.setAttribute("cx", point.x);
+    hoverDot.setAttribute("cy", point.y);
+    tooltipBg.setAttribute("x", tooltipX);
+    tooltipBg.setAttribute("y", tooltipY);
+    tooltipBg.setAttribute("width", tooltipWidth);
+    tooltipBg.setAttribute("height", tooltipHeight);
+    tooltipTitle.setAttribute("x", tooltipX + 14);
+    tooltipTitle.setAttribute("y", tooltipY + 21);
+    tooltipValue.setAttribute("x", tooltipX + 14);
+    tooltipValue.setAttribute("y", tooltipY + 42);
+    tooltipTime.setAttribute("x", tooltipX + 14);
+    tooltipTime.setAttribute("y", tooltipY + 59);
+    tooltipTitle.textContent = titleText;
+    tooltipValue.textContent = valueText;
+    tooltipTime.textContent = timeText;
+    hoverLayer.setAttribute("opacity", "1");
+  }
+
+  var hitbox = svgNode("rect", {
+    x: left,
+    y: top,
+    width: width - left - right,
+    height: height - top - bottom,
+    class: "chart-hover-hitbox",
+    role: "presentation",
+  });
+  hitbox.addEventListener("pointerenter", function (event) {
+    var eventPoint = svgEventPoint(svg, event);
+    showPoint(eventPoint ? nearestChartPoint(points, eventPoint.x) : points[points.length - 1]);
+  });
+  hitbox.addEventListener("pointermove", function (event) {
+    var eventPoint = svgEventPoint(svg, event);
+    if (eventPoint) {
+      showPoint(nearestChartPoint(points, eventPoint.x));
+    }
+  });
+  hitbox.addEventListener("pointerleave", function () {
+    hoverLayer.setAttribute("opacity", "0");
+  });
+  svg.appendChild(hitbox);
 }
 
 function renderMetricChart(definition, samples) {
@@ -1656,13 +1732,364 @@ function renderMetricChart(definition, samples) {
     class: "chart-endpoint",
     fill: definition.color,
   }));
+  appendChartHoverLayer(svg, definition, points, width, height, left, right, top, bottom, plotHeight);
 }
 
 function renderDashboardCharts() {
   var samples = filteredDashboardHistory();
   for (let definition of dashboardChartDefinitions) {
-    renderMetricSparkline(definition, samples);
     renderMetricChart(definition, samples);
+  }
+}
+
+function dashboardChartDefinitionById(id) {
+  for (let definition of dashboardChartDefinitions) {
+    if (definition.id === id) {
+      return definition;
+    }
+  }
+  return null;
+}
+
+function dashboardRangeLabel() {
+  var rangeSelect = document.getElementById("dashboard-range");
+  if (!rangeSelect) {
+    return "Selected range";
+  }
+  var option = rangeSelect.options[rangeSelect.selectedIndex];
+  return option ? option.textContent : "Selected range";
+}
+
+function safeFilePart(value) {
+  return String(value || "chart")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "chart";
+}
+
+function dashboardExportTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function dashboardChartExportStyles() {
+  return [
+    ".chart-area{pointer-events:none;}",
+    ".chart-endpoint{stroke:#ffffff;stroke-width:3;filter:drop-shadow(0 3px 6px rgba(15,23,42,0.16));}",
+    ".chart-axis,.chart-grid-line{stroke:#dbe5ef;stroke-width:1;}",
+    ".chart-grid-line{stroke-dasharray:4 6;}",
+    ".chart-line{fill:none;stroke-width:3.2;stroke-linejoin:round;stroke-linecap:round;filter:drop-shadow(0 5px 10px rgba(15,23,42,0.12));}",
+    ".chart-axis-text{fill:#64748b;font-size:12px;font-weight:500;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}",
+    ".chart-axis-label{fill:#475569;font-size:12px;font-weight:650;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}",
+    ".chart-empty{fill:#64748b;font-size:13px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}",
+    ".chart-export-title{fill:#111827;font-size:17px;font-weight:750;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}",
+    ".chart-export-subtitle{fill:#64748b;font-size:12px;font-weight:550;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}",
+  ].join("");
+}
+
+function chartExportViewBox(svg) {
+  var viewBox = String(svg.getAttribute("viewBox") || "").trim().split(/\s+/).map(Number);
+  if (viewBox.length === 4 && viewBox.every(Number.isFinite) && viewBox[2] > 0 && viewBox[3] > 0) {
+    return { x: viewBox[0], y: viewBox[1], width: viewBox[2], height: viewBox[3] };
+  }
+
+  var bounds = svg.getBoundingClientRect();
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(360, Math.round(bounds.width || svg.clientWidth || 640)),
+    height: Math.max(250, Math.round(bounds.height || svg.clientHeight || 270)),
+  };
+}
+
+function dashboardChartSvgExport(definition) {
+  var svg = document.getElementById("chart-" + definition.id);
+  if (!svg) {
+    throw new Error("Chart is not available.");
+  }
+
+  var sourceBox = chartExportViewBox(svg);
+  var headerHeight = 58;
+  var exportHeight = sourceBox.height + headerHeight;
+  var clone = svg.cloneNode(true);
+  clone.querySelectorAll(".chart-hover-layer, .chart-hover-hitbox").forEach(function (node) {
+    node.remove();
+  });
+  clone.removeAttribute("id");
+  clone.setAttribute("x", "0");
+  clone.setAttribute("y", String(headerHeight));
+  clone.setAttribute("width", String(sourceBox.width));
+  clone.setAttribute("height", String(sourceBox.height));
+  clone.setAttribute("viewBox", [
+    sourceBox.x,
+    sourceBox.y,
+    sourceBox.width,
+    sourceBox.height,
+  ].join(" "));
+
+  var wrapper = svgNode("svg", {
+    xmlns: "http://www.w3.org/2000/svg",
+    width: sourceBox.width,
+    height: exportHeight,
+    viewBox: "0 0 " + sourceBox.width + " " + exportHeight,
+  });
+  var style = svgNode("style");
+  style.textContent = dashboardChartExportStyles();
+  wrapper.appendChild(style);
+  wrapper.appendChild(svgNode("rect", {
+    x: 0,
+    y: 0,
+    width: sourceBox.width,
+    height: exportHeight,
+    fill: "#ffffff",
+  }));
+  appendChartText(wrapper, {
+    x: 18,
+    y: 25,
+    class: "chart-export-title",
+  }, definition.label || definition.yLabel);
+  appendChartText(wrapper, {
+    x: 18,
+    y: 44,
+    class: "chart-export-subtitle",
+  }, dashboardRangeLabel() + " | Exported " + formatChartTooltipTime(Date.now() / 1000));
+  wrapper.appendChild(clone);
+
+  return {
+    markup: new XMLSerializer().serializeToString(wrapper),
+    width: sourceBox.width,
+    height: exportHeight,
+  };
+}
+
+function svgExportToPngBlob(exportedSvg) {
+  return new Promise(function (resolve, reject) {
+    var scale = 2;
+    var svgBlob = new Blob([exportedSvg.markup], { type: "image/svg+xml;charset=utf-8" });
+    var url = URL.createObjectURL(svgBlob);
+    var image = new Image();
+
+    image.onload = function () {
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(exportedSvg.width * scale);
+      canvas.height = Math.ceil(exportedSvg.height * scale);
+      var context = canvas.getContext("2d");
+      context.setTransform(scale, 0, 0, scale, 0, 0);
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, exportedSvg.width, exportedSvg.height);
+      context.drawImage(image, 0, 0, exportedSvg.width, exportedSvg.height);
+      URL.revokeObjectURL(url);
+
+      if (canvas.toBlob) {
+        canvas.toBlob(function (blob) {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error("Unable to create PNG."));
+          }
+        }, "image/png");
+      } else {
+        fetch(canvas.toDataURL("image/png"))
+          .then(function (response) {
+            return response.blob();
+          })
+          .then(resolve)
+          .catch(reject);
+      }
+    };
+
+    image.onerror = function () {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to render chart image."));
+    };
+    image.src = url;
+  });
+}
+
+async function dashboardChartPngFile(definition, timestamp) {
+  var exportedSvg = dashboardChartSvgExport(definition);
+  var blob = await svgExportToPngBlob(exportedSvg);
+  return {
+    name: "gateway-dashboard-" + safeFilePart(definition.label || definition.id) + "-" + timestamp + ".png",
+    blob: blob,
+  };
+}
+
+function downloadBlob(blob, filename) {
+  var url = URL.createObjectURL(blob);
+  var link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(function () {
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
+function setDownloadButtonBusy(button, text) {
+  if (!button) {
+    return function () {};
+  }
+  var previousText = button.textContent;
+  button.disabled = true;
+  button.textContent = text;
+  return function () {
+    button.disabled = false;
+    button.textContent = previousText;
+  };
+}
+
+async function downloadDashboardChart(id, button) {
+  var restoreButton = setDownloadButtonBusy(button, "...");
+  try {
+    var definition = dashboardChartDefinitionById(id);
+    if (!definition) {
+      throw new Error("Unknown chart.");
+    }
+    var file = await dashboardChartPngFile(definition, dashboardExportTimestamp());
+    downloadBlob(file.blob, file.name);
+  } catch (error) {
+    console.error(error);
+    window.alert("Unable to download chart: " + error.message);
+  } finally {
+    restoreButton();
+  }
+}
+
+function zipStringBytes(value) {
+  if (window.TextEncoder) {
+    return new TextEncoder().encode(value);
+  }
+  var bytes = new Uint8Array(value.length);
+  for (let index = 0; index < value.length; index++) {
+    bytes[index] = value.charCodeAt(index) & 0xff;
+  }
+  return bytes;
+}
+
+function zipCrcTable() {
+  if (dashboardCrcTable) {
+    return dashboardCrcTable;
+  }
+  dashboardCrcTable = [];
+  for (let index = 0; index < 256; index++) {
+    var value = index;
+    for (let bit = 0; bit < 8; bit++) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    dashboardCrcTable[index] = value >>> 0;
+  }
+  return dashboardCrcTable;
+}
+
+function zipCrc32(bytes) {
+  var table = zipCrcTable();
+  var crc = 0xffffffff;
+  for (let index = 0; index < bytes.length; index++) {
+    crc = table[(crc ^ bytes[index]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zipDosDateTime(date) {
+  var year = Math.max(1980, date.getFullYear());
+  return {
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+  };
+}
+
+async function blobToBytes(blob) {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function createZipBlob(files) {
+  var localParts = [];
+  var centralParts = [];
+  var offset = 0;
+  var dosDateTime = zipDosDateTime(new Date());
+
+  for (let file of files) {
+    var nameBytes = zipStringBytes(file.name);
+    var bytes = file.bytes;
+    var crc = zipCrc32(bytes);
+    var localHeader = new Uint8Array(30);
+    var localView = new DataView(localHeader.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, dosDateTime.time, true);
+    localView.setUint16(12, dosDateTime.date, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, bytes.length, true);
+    localView.setUint32(22, bytes.length, true);
+    localView.setUint16(26, nameBytes.length, true);
+    localView.setUint16(28, 0, true);
+    localParts.push(localHeader, nameBytes, bytes);
+
+    var centralHeader = new Uint8Array(46);
+    var centralView = new DataView(centralHeader.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, dosDateTime.time, true);
+    centralView.setUint16(14, dosDateTime.date, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, bytes.length, true);
+    centralView.setUint32(24, bytes.length, true);
+    centralView.setUint16(28, nameBytes.length, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, offset, true);
+    centralParts.push(centralHeader, nameBytes);
+
+    offset += localHeader.byteLength + nameBytes.byteLength + bytes.byteLength;
+  }
+
+  var centralOffset = offset;
+  var centralSize = centralParts.reduce(function (total, part) {
+    return total + part.byteLength;
+  }, 0);
+  var endRecord = new Uint8Array(22);
+  var endView = new DataView(endRecord.buffer);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, files.length, true);
+  endView.setUint16(10, files.length, true);
+  endView.setUint32(12, centralSize, true);
+  endView.setUint32(16, centralOffset, true);
+  endView.setUint16(20, 0, true);
+
+  return new Blob(localParts.concat(centralParts, [endRecord]), { type: "application/zip" });
+}
+
+async function downloadAllDashboardCharts(button) {
+  var restoreButton = setDownloadButtonBusy(button, "Preparing...");
+  try {
+    var timestamp = dashboardExportTimestamp();
+    var files = [];
+    for (let definition of dashboardChartDefinitions) {
+      var pngFile = await dashboardChartPngFile(definition, timestamp);
+      files.push({
+        name: pngFile.name,
+        bytes: await blobToBytes(pngFile.blob),
+      });
+    }
+    var zipBlob = createZipBlob(files);
+    downloadBlob(zipBlob, "gateway-dashboard-graphs-" + timestamp + ".zip");
+  } catch (error) {
+    console.error(error);
+    window.alert("Unable to download chart zip: " + error.message);
+  } finally {
+    restoreButton();
   }
 }
 
@@ -1714,7 +2141,7 @@ function startDashboardPolling() {
     return;
   }
   loadDashboardStats();
-  dashboardPollTimer = window.setInterval(loadDashboardStats, 30000);
+  dashboardPollTimer = window.setInterval(loadDashboardStats, dashboardRefreshMilliseconds);
 }
 
 function startDashboardStream() {

@@ -128,6 +128,7 @@ ALLOWED_BACKUP_SCHEDULES = {"manual", "hourly", "daily", "weekly"}
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 DEFAULT_BACKUP_PREFIX = "ona-backups/"
 DEFAULT_BACKUP_RETENTION = 30
+DASHBOARD_REFRESH_SECONDS = 5
 IMDS_VNICS_URL = "http://169.254.169.254/opc/v2/vnics/"
 
 _provider_cache = {}
@@ -143,7 +144,9 @@ _last_conntrack_sample = None
 _dashboard_history = []
 _dashboard_history_loaded = False
 _dashboard_history_retention_seconds = 24 * 60 * 60
-_dashboard_history_max_samples = 5000
+_dashboard_history_max_samples = (
+    int(_dashboard_history_retention_seconds / DASHBOARD_REFRESH_SECONDS) + 1000
+)
 
 
 class RuleValidationError(ValueError):
@@ -2707,7 +2710,7 @@ def api_dashboard_stream(current_user):
     def events():
         while True:
             yield f"data: {json.dumps(dashboard_metrics())}\n\n"
-            time.sleep(30)
+            time.sleep(DASHBOARD_REFRESH_SECONDS)
 
     response = Response(events(), mimetype="text/event-stream")
     response.headers["Cache-Control"] = "no-cache"
