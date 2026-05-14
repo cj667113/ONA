@@ -1632,7 +1632,7 @@ def decorate_snat_pool_sources(sources):
     return decorated
 
 
-def validate_snat_pool_payload(payload):
+def validate_snat_pool_payload(payload, scan=None):
     if not isinstance(payload, dict):
         raise RuleValidationError("Expected a JSON object for SNAT pool policy.")
 
@@ -1658,7 +1658,8 @@ def validate_snat_pool_payload(payload):
             "sources": [],
         }
 
-    scan = vnic_scan_state()
+    if scan is None:
+        scan = vnic_scan_state()
     scanned_ips = {entry["ip"]: entry for entry in scan.get("source_ips", [])}
     unknown_ips = [ip for ip in source_ips if ip not in scanned_ips]
     if unknown_ips:
@@ -2661,7 +2662,7 @@ def api_vnics_snat_pool(current_user):
         }
         if parse_bool(data.get("enabled", False), "SNAT pool enabled"):
             configuration = configure_vnic_interfaces()
-        pool = validate_snat_pool_payload(data)
+        pool = validate_snat_pool_payload(data, scan=configuration["scan"])
         apply_snat_pool(pool)
         nat_rules = process_nat_rules(get_nat_rules())
         return jsonify(

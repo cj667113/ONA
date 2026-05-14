@@ -618,6 +618,26 @@ function vnicConfigurationMessage(data, fallbackMessage) {
   return fallbackMessage;
 }
 
+function vnicSourceSelectable(ipInfo) {
+  return Boolean(ipInfo && ipInfo.ip && ipInfo.vnic_id);
+}
+
+function vnicSourceTitle(ipInfo) {
+  if (!ipInfo || !ipInfo.ip) {
+    return "Source IP is missing from the VNIC scan.";
+  }
+  if (!ipInfo.vnic_id) {
+    return "Source IP is missing VNIC metadata needed for SNAT.";
+  }
+  if (!ipInfo.interface) {
+    return "Apply SNAT Pool will configure the OS interface before applying SNAT.";
+  }
+  if (!ipInfo.configured) {
+    return "Apply SNAT Pool will add this address before applying SNAT.";
+  }
+  return "Use this source IP in the SNAT pool.";
+}
+
 function renderVnicState(data) {
   var scan = data.scan || {};
   var pool = data.snat_pool || {};
@@ -658,7 +678,8 @@ function renderVnicState(data) {
     checkbox.className = "form-check-input snat-source-checkbox";
     checkbox.value = ipInfo.ip;
     checkbox.checked = selectedIps.has(ipInfo.ip);
-    checkbox.disabled = !ipInfo.interface;
+    checkbox.disabled = !vnicSourceSelectable(ipInfo);
+    checkbox.title = vnicSourceTitle(ipInfo);
     useCell.appendChild(checkbox);
     row.appendChild(useCell);
 

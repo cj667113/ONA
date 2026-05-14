@@ -49,6 +49,30 @@ class SnatPoolTests(unittest.TestCase):
                     {"enabled": True, "source_ips": ["10.0.0.10"]}
                 )
 
+    def test_enabled_payload_can_validate_against_supplied_scan(self):
+        scan = {
+            "source_ips": [
+                {
+                    "ip": "10.0.0.10",
+                    "interface": "eth1",
+                    "configured": True,
+                    "virtual_router_ip": "10.0.0.1",
+                    "vnic_id": "vnic-a",
+                }
+            ]
+        }
+
+        with mock.patch.object(ona_app, "vnic_scan_state", side_effect=AssertionError):
+            pool = ona_app.validate_snat_pool_payload(
+                {"enabled": True, "source_ips": ["10.0.0.10"]},
+                scan=scan,
+            )
+
+        self.assertTrue(pool["enabled"])
+        self.assertEqual(pool["source_ips"], ["10.0.0.10"])
+        self.assertEqual(pool["interface"], "eth1")
+        self.assertEqual(pool["sources"][0]["virtual_router_ip"], "10.0.0.1")
+
     def test_temp_chain_cleanup_runs_when_mangle_chain_creation_fails(self):
         calls = []
 
