@@ -37,18 +37,25 @@
     }
 
     .app-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
+      display: grid;
+      grid-template-columns: minmax(300px, 1fr) minmax(520px, 760px) minmax(220px, 1fr);
+      grid-template-areas: "brand nav meta";
+      align-items: center;
       gap: 20px;
-      margin-bottom: 18px;
+      margin-bottom: 24px;
+    }
+
+    .app-brand {
+      grid-area: brand;
+      min-width: 0;
     }
 
     .app-title {
       margin: 0;
-      font-size: 2rem;
+      font-size: clamp(1.85rem, 2vw, 2.15rem);
       line-height: 1.15;
       font-weight: 700;
+      white-space: nowrap;
     }
 
     .app-kicker {
@@ -61,35 +68,46 @@
     }
 
     .app-meta {
+      grid-area: meta;
+      justify-self: end;
+      padding: 7px 11px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.48);
       color: var(--ona-muted);
       font-size: 0.9rem;
+      white-space: nowrap;
     }
 
     .app-nav {
+      grid-area: nav;
       display: flex;
       justify-content: center;
-      margin: 4px 0 18px;
+      min-width: 0;
+      margin: 0;
     }
 
     .nat-tabs {
-      display: inline-flex;
-      flex-wrap: wrap;
-      justify-content: center;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 4px;
-      padding: 4px;
+      width: 100%;
+      padding: 5px;
       background: #e9eef5;
       border: 1px solid var(--ona-border-soft);
-      border-radius: 8px;
+      border-radius: 10px;
     }
 
     .nat-tab {
       border: 0;
-      border-radius: 6px;
+      border-radius: 7px;
       background: transparent;
       color: #475569;
       font-weight: 650;
-      min-width: 138px;
-      padding: 10px 16px;
+      min-width: 0;
+      padding: 11px 14px;
+      line-height: 1.2;
+      white-space: nowrap;
     }
 
     .nat-tab.is-active {
@@ -572,6 +590,16 @@
       line-height: 1.2;
     }
 
+    @media (max-width: 1180px) {
+      .app-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "brand meta"
+          "nav nav";
+        gap: 14px 18px;
+      }
+    }
+
     @media (max-width: 992px) {
       .metric-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -588,22 +616,36 @@
         padding: 18px 12px 28px;
       }
 
-      .app-header,
       .panel-header {
         display: block;
       }
 
+      .app-header {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "brand"
+          "meta"
+          "nav";
+        gap: 10px;
+      }
+
       .app-title {
         font-size: 1.6rem;
+        white-space: normal;
+      }
+
+      .app-meta {
+        justify-self: start;
       }
 
       .nat-tabs {
         width: 100%;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       .nat-tab {
-        min-width: 0;
-        flex: 1;
+        padding: 10px 8px;
+        white-space: normal;
       }
 
       .metric-grid,
@@ -666,21 +708,20 @@
 
   <main class="app-shell">
     <header class="app-header">
-      <div>
+      <div class="app-brand">
         <p class="app-kicker">Gateway Console</p>
         <h1 class="app-title">{{ title }}</h1>
       </div>
+      <nav class="app-nav" aria-label="Gateway sections">
+        <div class="nat-tabs">
+          <button onclick="changeMenu('dashboard')" type="button" id="dashboard-btn" class="nat-tab is-active">Gateway Dashboard</button>
+          <button onclick="changeMenu('dnat')" type="button" id="dnat-btn" class="nat-tab">Destination NAT</button>
+          <button onclick="changeMenu('snat')" type="button" id="snat-btn" class="nat-tab">Source NAT</button>
+          <button onclick="changeMenu('backups')" type="button" id="backups-btn" class="nat-tab">Backups</button>
+        </div>
+      </nav>
       <div class="app-meta">Signed in as {{ current_user }}</div>
     </header>
-
-    <nav class="app-nav" aria-label="Gateway sections">
-      <div class="nat-tabs">
-        <button onclick="changeMenu('dashboard')" type="button" id="dashboard-btn" class="nat-tab is-active">Gateway Dashboard</button>
-        <button onclick="changeMenu('dnat')" type="button" id="dnat-btn" class="nat-tab">Destination NAT</button>
-        <button onclick="changeMenu('snat')" type="button" id="snat-btn" class="nat-tab">Source NAT</button>
-        <button onclick="changeMenu('backups')" type="button" id="backups-btn" class="nat-tab">Backups</button>
-      </div>
-    </nav>
 
     {% block content %}{% endblock %}
   </main>
