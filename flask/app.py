@@ -2269,14 +2269,14 @@ def scan_nat_port_usage(snat_source_ips=None, lines=None):
         ):
             source_ip = tuple_values["dst"][1]
             source_port = tuple_values["dport"][1]
-            port_key = source_port
+            port_key = (source_ip, source_port)
             ports_by_source_ip.setdefault(source_ip, set()).add(source_port)
         elif (
             not snat_source_ips
             and tuple_values["sport"]
             and tuple_values["sport"][0].isdigit()
         ):
-            port_key = tuple_values["sport"][0]
+            port_key = ("", tuple_values["sport"][0])
 
         if port_key is not None:
             all_ports.add(port_key)
@@ -2406,7 +2406,7 @@ def conntrack_metrics():
     source_ip_count = max(1, source_ip_count)
     port_usage = cached_nat_port_usage(snat_source_ips, total_connections, now)
     ports_in_use = port_usage["ports_in_use"]
-    total_available_ports = port_capacity["per_ip_total"]
+    total_available_ports = port_capacity["per_ip_total"] * source_ip_count
     utilization = round((ports_in_use / total_available_ports) * 100, 2) if total_available_ports else 0
     connection_utilization = (
         round((total_connections / max_connections) * 100, 2)

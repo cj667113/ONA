@@ -530,10 +530,10 @@ class NatPortCapacityTests(unittest.TestCase):
         self.assertEqual(metrics["ports_in_use_by_protocol"], {"tcp": 1, "udp": 1})
         self.assertEqual(metrics["ports_in_use"], 1)
         self.assertEqual(metrics["snat_source_ip_count"], 2)
-        self.assertEqual(metrics["total_available_ports"], 65535)
-        self.assertEqual(metrics["available_ports"], 65534)
+        self.assertEqual(metrics["total_available_ports"], 131070)
+        self.assertEqual(metrics["available_ports"], 131069)
 
-    def test_scan_nat_port_usage_counts_translated_snat_source_port_numbers(self):
+    def test_scan_nat_port_usage_counts_translated_snat_source_port_slots(self):
         usage = ona_app.scan_nat_port_usage(
             ["10.40.20.68", "10.40.20.69"],
             lines=[
@@ -543,7 +543,7 @@ class NatPortCapacityTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(usage["ports_in_use"], 2)
+        self.assertEqual(usage["ports_in_use"], 3)
         self.assertEqual(usage["ports_in_use_by_protocol"], {"tcp": 2, "udp": 1})
         self.assertEqual(usage["ports_in_use_by_source_ip"]["10.40.20.68"], 2)
         self.assertEqual(usage["ports_in_use_by_source_ip"]["10.40.20.69"], 1)

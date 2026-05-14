@@ -2159,7 +2159,7 @@ function renderDashboardStats(data) {
   setText("metric-memory-detail", formatBytes(memory.used_bytes) + " / " + formatBytes(memory.total_bytes));
 
   var portDetail = formatNumber(nat.available_ports) + " available of " +
-    formatNumber(nat.total_available_ports) + " unique ports";
+    formatNumber(nat.total_available_ports) + " across " + formatNumber(nat.snat_source_ip_count || 1) + " IPs";
   if (nat.port_scan_in_progress) {
     portDetail += " | scanning conntrack";
   } else if (Number.isFinite(Number(nat.port_metrics_stale_seconds)) && Number(nat.port_metrics_stale_seconds) > dashboardRefreshMilliseconds / 1000) {
