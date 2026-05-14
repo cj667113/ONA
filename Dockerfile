@@ -1,5 +1,5 @@
 FROM oraclelinux:9
-RUN dnf install -y iptables conntrack-tools iproute kmod python3 python3-pip && \
+RUN dnf install -y iptables conntrack-tools iproute kmod oci-utils python3 python3-pip && \
     dnf clean all
 
 WORKDIR /ONA

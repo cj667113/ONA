@@ -73,6 +73,37 @@ class SnatPoolTests(unittest.TestCase):
         self.assertEqual(pool["interface"], "eth1")
         self.assertEqual(pool["sources"][0]["virtual_router_ip"], "10.0.0.1")
 
+    def test_oci_network_configure_runs_configure_command(self):
+        completed = SimpleNamespace(returncode=0, stdout="configured\n", stderr="")
+
+        with mock.patch.dict(os.environ, {ona_app.OCI_NETWORK_CONFIG_ENV: ""}), mock.patch.object(
+            ona_app.shutil, "which", return_value="/usr/bin/oci-network-config"
+        ), mock.patch.object(ona_app.subprocess, "run", return_value=completed) as run:
+            result = ona_app.run_oci_network_configure()
+
+        run.assert_called_once_with(
+            ["/usr/bin/oci-network-config", "configure"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result["method"], "oci-network-config")
+        self.assertEqual(result["command"], "/usr/bin/oci-network-config configure")
+        self.assertTrue(result["available"])
+        self.assertFalse(result["errors"])
+
+    def test_oci_network_configure_reports_unavailable_for_ip_fallback(self):
+        with mock.patch.dict(os.environ, {ona_app.OCI_NETWORK_CONFIG_ENV: ""}), mock.patch.object(
+            ona_app.shutil, "which", return_value=None
+        ), mock.patch.object(ona_app.os.path, "isfile", return_value=False):
+            result = ona_app.run_oci_network_configure()
+
+        self.assertEqual(result["method"], "oci-network-config")
+        self.assertEqual(result["command"], "oci-network-config configure")
+        self.assertFalse(result["available"])
+        self.assertTrue(result["skipped"])
+        self.assertFalse(result["errors"])
+
     def test_temp_chain_cleanup_runs_when_mangle_chain_creation_fails(self):
         calls = []
 
@@ -455,15 +486,24 @@ class NatPortCapacityTests(unittest.TestCase):
 
     def test_conntrack_metrics_counts_unique_ports_once_across_protocols(self):
         previous_sample = ona_app._last_conntrack_sample
+        previous_port_cache = ona_app._nat_port_metrics_cache
+        previous_port_scan = ona_app._nat_port_scan_in_progress
         ona_app._last_conntrack_sample = None
+        ona_app._nat_port_metrics_cache = None
+        ona_app._nat_port_scan_in_progress = False
+        port_usage = {
+            "ports_in_use": 1,
+            "ports_in_use_by_protocol": {"tcp": 1, "udp": 1},
+            "ports_in_use_by_source_ip": {},
+            "protocol_counts": {"tcp": 1, "udp": 1},
+            "conntrack_entries_scanned": 2,
+            "sampled_at": time.time(),
+        }
         try:
             with mock.patch.object(ona_app, "read_first_int", return_value=1000), mock.patch.object(
                 ona_app,
-                "parse_conntrack_lines",
-                return_value=[
-                    "ipv4 2 tcp 6 300 ESTABLISHED src=10.0.0.2 dst=198.51.100.10 sport=12345 dport=443\n",
-                    "ipv4 2 udp 17 30 src=10.0.0.2 dst=198.51.100.10 sport=12345 dport=53\n",
-                ],
+                "scan_nat_port_usage",
+                return_value=port_usage,
             ), mock.patch.object(
                 ona_app,
                 "read_port_capacity",
@@ -479,16 +519,46 @@ class NatPortCapacityTests(unittest.TestCase):
             ), mock.patch.object(
                 ona_app,
                 "snat_pool_policy",
-                return_value={"enabled": False, "source_ips": []},
+                return_value={"enabled": True, "source_ips": ["10.0.0.10", "10.0.0.11"]},
             ):
                 metrics = ona_app.conntrack_metrics()
         finally:
             ona_app._last_conntrack_sample = previous_sample
+            ona_app._nat_port_metrics_cache = previous_port_cache
+            ona_app._nat_port_scan_in_progress = previous_port_scan
 
         self.assertEqual(metrics["ports_in_use_by_protocol"], {"tcp": 1, "udp": 1})
         self.assertEqual(metrics["ports_in_use"], 1)
+        self.assertEqual(metrics["snat_source_ip_count"], 2)
         self.assertEqual(metrics["total_available_ports"], 65535)
         self.assertEqual(metrics["available_ports"], 65534)
+
+    def test_scan_nat_port_usage_counts_translated_snat_source_port_numbers(self):
+        usage = ona_app.scan_nat_port_usage(
+            ["10.40.20.68", "10.40.20.69"],
+            lines=[
+                "ipv4 2 tcp 6 300 ESTABLISHED src=10.40.40.10 dst=198.51.100.10 sport=40000 dport=8080 src=198.51.100.10 dst=10.40.20.68 sport=8080 dport=20000\n",
+                "ipv4 2 tcp 6 300 ESTABLISHED src=10.40.40.11 dst=198.51.100.10 sport=40001 dport=8080 src=198.51.100.10 dst=10.40.20.68 sport=8080 dport=20001\n",
+                "ipv4 2 udp 17 30 src=10.40.40.12 dst=198.51.100.10 sport=40002 dport=8080 src=198.51.100.10 dst=10.40.20.69 sport=8080 dport=20000\n",
+            ],
+        )
+
+        self.assertEqual(usage["ports_in_use"], 2)
+        self.assertEqual(usage["ports_in_use_by_protocol"], {"tcp": 2, "udp": 1})
+        self.assertEqual(usage["ports_in_use_by_source_ip"]["10.40.20.68"], 2)
+        self.assertEqual(usage["ports_in_use_by_source_ip"]["10.40.20.69"], 1)
+
+    def test_scan_nat_port_usage_does_not_double_tcp_udp_same_source_port(self):
+        usage = ona_app.scan_nat_port_usage(
+            ["10.40.20.68"],
+            lines=[
+                "ipv4 2 tcp 6 300 ESTABLISHED src=10.40.40.10 dst=198.51.100.10 sport=40000 dport=8080 src=198.51.100.10 dst=10.40.20.68 sport=8080 dport=20000\n",
+                "ipv4 2 udp 17 30 src=10.40.40.10 dst=198.51.100.10 sport=40000 dport=8080 src=198.51.100.10 dst=10.40.20.68 sport=8080 dport=20000\n",
+            ],
+        )
+
+        self.assertEqual(usage["ports_in_use"], 1)
+        self.assertEqual(usage["ports_in_use_by_protocol"], {"tcp": 1, "udp": 1})
 
 
 class DashboardHistoryTests(unittest.TestCase):

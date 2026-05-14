@@ -601,21 +601,35 @@ function vnicConfigurationMessage(data, fallbackMessage) {
   var configuration = data.configuration || {};
   var results = configuration.results || [];
   var errors = configuration.errors || [];
+  var method = configuration.method || "";
+  var previousMethod = configuration.previous_method || "";
+  var previousSkipped = Boolean(configuration.previous_skipped);
+  var methodMessage = "";
   var configured = Number.isFinite(Number(configuration.configured_count))
     ? Number(configuration.configured_count)
     : results.filter(function (item) {
       return item.status === "configured";
     }).length;
 
+  if (method === "oci-network-config") {
+    methodMessage = "Ran oci-network-config configure. ";
+  } else if (previousMethod === "oci-network-config" && method === "ip") {
+    methodMessage = previousSkipped
+      ? "oci-network-config unavailable; used ip fallback. "
+      : "Ran oci-network-config configure; used ip fallback. ";
+  } else if (method === "ip") {
+    methodMessage = "Used ip fallback. ";
+  }
+
   if (errors.length) {
-    return configured
+    return methodMessage + (configured
       ? "Configured " + formatNumber(configured) + " address(es); " + formatNumber(errors.length) + " need attention."
-      : formatNumber(errors.length) + " address(es) still need attention.";
+      : formatNumber(errors.length) + " address(es) still need attention.");
   }
   if (configured) {
-    return "Configured " + formatNumber(configured) + " address(es).";
+    return methodMessage + "Configured " + formatNumber(configured) + " address(es).";
   }
-  return fallbackMessage;
+  return methodMessage + fallbackMessage;
 }
 
 function vnicSourceSelectable(ipInfo) {
@@ -1134,6 +1148,14 @@ function formatRateBytes(value) {
 
 function formatRatePackets(value) {
   return Number(value || 0).toFixed(1) + " pkt/s";
+}
+
+function formatDuration(seconds) {
+  var value = Math.max(0, Number(seconds || 0));
+  if (value < 60) {
+    return Math.round(value) + "s";
+  }
+  return Math.round(value / 60) + "m";
 }
 
 function formatPercentTick(value) {
@@ -2130,9 +2152,15 @@ function renderDashboardStats(data) {
   setText("metric-memory-percent", formatPercent(memory.percent));
   setText("metric-memory-detail", formatBytes(memory.used_bytes) + " / " + formatBytes(memory.total_bytes));
 
+  var portDetail = formatNumber(nat.available_ports) + " available of " +
+    formatNumber(nat.total_available_ports) + " unique ports";
+  if (nat.port_scan_in_progress) {
+    portDetail += " | scanning conntrack";
+  } else if (Number.isFinite(Number(nat.port_metrics_stale_seconds)) && Number(nat.port_metrics_stale_seconds) > dashboardRefreshMilliseconds / 1000) {
+    portDetail += " | sampled " + formatDuration(Number(nat.port_metrics_stale_seconds)) + " ago";
+  }
   setText("metric-ports-used", formatNumber(nat.ports_in_use) + " used");
-  setText("metric-ports-detail", formatNumber(nat.available_ports) + " available of " +
-    formatNumber(nat.total_available_ports) + " across " + formatNumber(nat.snat_source_ip_count || 1) + " IPs");
+  setText("metric-ports-detail", portDetail);
 
   setText("metric-connections-total", formatNumber(nat.total_connections));
   setText("metric-conn-rate", Number(nat.connections_per_second || 0).toFixed(2) + " conn/s");

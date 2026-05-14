@@ -129,7 +129,17 @@ WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 DEFAULT_BACKUP_PREFIX = "ona-backups/"
 DEFAULT_BACKUP_RETENTION = 30
 DASHBOARD_REFRESH_SECONDS = 15
+NAT_PORT_SCAN_INTERVAL_SECONDS = 15
+NAT_PORT_SYNC_SCAN_MAX_CONNECTIONS = 50000
 IMDS_VNICS_URL = "http://169.254.169.254/opc/v2/vnics/"
+OCI_NETWORK_CONFIG_ENV = "ONA_OCI_NETWORK_CONFIG"
+OCI_NETWORK_CONFIG_CANDIDATES = (
+    "oci-network-config",
+    "/usr/sbin/oci-network-config",
+    "/usr/bin/oci-network-config",
+    "/sbin/oci-network-config",
+    "/bin/oci-network-config",
+)
 
 _provider_cache = {}
 _jwks_cache = {}
@@ -147,6 +157,8 @@ _dashboard_history_retention_seconds = 24 * 60 * 60
 _dashboard_history_max_samples = (
     int(_dashboard_history_retention_seconds / DASHBOARD_REFRESH_SECONDS) + 1000
 )
+_nat_port_metrics_cache = None
+_nat_port_scan_in_progress = False
 
 
 class RuleValidationError(ValueError):
@@ -1520,33 +1532,69 @@ def configure_vnics_with_ip(metadata_vnics, interfaces):
     return {"method": "ip", "results": results, "errors": errors}
 
 
+def oci_network_config_command():
+    override = os.getenv(OCI_NETWORK_CONFIG_ENV, "").strip()
+    candidates = (override,) if override else OCI_NETWORK_CONFIG_CANDIDATES
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
 def run_oci_network_configure():
-    if not shutil.which("oci-network-config"):
-        return None
+    command = oci_network_config_command()
+    if not command:
+        return {
+            "method": "oci-network-config",
+            "command": "oci-network-config configure",
+            "available": False,
+            "skipped": True,
+            "results": [],
+            "errors": [],
+        }
 
     completed = subprocess.run(
-        ["oci-network-config", "configure"],
+        [command, "configure"],
         check=False,
         capture_output=True,
         text=True,
     )
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
     if completed.returncode != 0:
         return {
             "method": "oci-network-config",
+            "command": f"{command} configure",
+            "available": True,
+            "returncode": completed.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
             "results": [],
             "errors": [
                 {
                     "status": "error",
-                    "message": completed.stderr.strip() or completed.stdout.strip() or "oci-network-config configure failed",
+                    "message": stderr or stdout or "oci-network-config configure failed",
                 }
             ],
         }
     return {
         "method": "oci-network-config",
+        "command": f"{command} configure",
+        "available": True,
+        "returncode": completed.returncode,
+        "stdout": stdout,
+        "stderr": stderr,
         "results": [
             {
                 "status": "configured",
-                "message": completed.stdout.strip() or "Configured",
+                "message": stdout or "Configured",
             }
         ],
         "errors": [],
@@ -1559,7 +1607,7 @@ def configure_vnic_interfaces():
     save_vnic_scan(before_scan)
 
     configuration = run_oci_network_configure()
-    fallback_needed = configuration is None or configuration.get("errors")
+    fallback_needed = configuration.get("skipped") or configuration.get("errors")
     if not fallback_needed:
         after_oci_scan = normalize_vnic_scan(metadata_vnics, local_interfaces())
         fallback_needed = any(
@@ -1568,9 +1616,10 @@ def configure_vnic_interfaces():
         )
     if fallback_needed:
         fallback = configure_vnics_with_ip(metadata_vnics, local_interfaces())
-        if configuration and configuration.get("errors"):
-            fallback["previous_method"] = configuration["method"]
-            fallback["previous_errors"] = configuration["errors"]
+        fallback["previous_method"] = configuration["method"]
+        fallback["previous_command"] = configuration.get("command", "")
+        fallback["previous_errors"] = configuration.get("errors", [])
+        fallback["previous_skipped"] = configuration.get("skipped", False)
         configuration = fallback
 
     after_scan = normalize_vnic_scan(metadata_vnics, local_interfaces())
@@ -2164,14 +2213,173 @@ def conntrack_paths():
     return ("/proc/net/nf_conntrack", "/proc/net/ip_conntrack")
 
 
-def parse_conntrack_lines():
+def iter_conntrack_lines():
     for path in conntrack_paths():
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as conntrack_file:
-                return conntrack_file.readlines()
+                for line in conntrack_file:
+                    yield line
+                return
         except OSError:
             continue
-    return []
+
+
+def parse_conntrack_lines():
+    return list(iter_conntrack_lines())
+
+
+def conntrack_tuple_fields(fields):
+    values = {"src": [], "dst": [], "sport": [], "dport": []}
+    for token in fields:
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        if key in values:
+            values[key].append(value)
+    return values
+
+
+def scan_nat_port_usage(snat_source_ips=None, lines=None):
+    snat_source_ips = set(snat_source_ips or [])
+    protocol_counts = {}
+    ports_by_protocol = {"tcp": set(), "udp": set()}
+    ports_by_source_ip = {ip: set() for ip in snat_source_ips}
+    all_ports = set()
+    entries_scanned = 0
+    line_iterable = lines if lines is not None else iter_conntrack_lines()
+
+    for line in line_iterable:
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        entries_scanned += 1
+        protocol = fields[2].lower()
+        protocol_counts[protocol] = protocol_counts.get(protocol, 0) + 1
+        if protocol not in ports_by_protocol:
+            continue
+
+        tuple_values = conntrack_tuple_fields(fields)
+        port_key = None
+        if (
+            snat_source_ips
+            and len(tuple_values["dst"]) > 1
+            and len(tuple_values["dport"]) > 1
+            and tuple_values["dst"][1] in snat_source_ips
+            and tuple_values["dport"][1].isdigit()
+        ):
+            source_ip = tuple_values["dst"][1]
+            source_port = tuple_values["dport"][1]
+            port_key = source_port
+            ports_by_source_ip.setdefault(source_ip, set()).add(source_port)
+        elif (
+            not snat_source_ips
+            and tuple_values["sport"]
+            and tuple_values["sport"][0].isdigit()
+        ):
+            port_key = tuple_values["sport"][0]
+
+        if port_key is not None:
+            all_ports.add(port_key)
+            ports_by_protocol[protocol].add(port_key)
+
+    return {
+        "ports_in_use": len(all_ports),
+        "ports_in_use_by_protocol": {
+            protocol: len(ports)
+            for protocol, ports in ports_by_protocol.items()
+        },
+        "ports_in_use_by_source_ip": {
+            ip: len(ports)
+            for ip, ports in sorted(ports_by_source_ip.items())
+        },
+        "protocol_counts": protocol_counts,
+        "conntrack_entries_scanned": entries_scanned,
+        "sampled_at": time.time(),
+    }
+
+
+def zero_nat_port_usage(snat_source_ips=None):
+    snat_source_ips = sorted(set(snat_source_ips or []))
+    return {
+        "ports_in_use": 0,
+        "ports_in_use_by_protocol": {"tcp": 0, "udp": 0},
+        "ports_in_use_by_source_ip": {ip: 0 for ip in snat_source_ips},
+        "protocol_counts": {},
+        "conntrack_entries_scanned": 0,
+        "sampled_at": None,
+    }
+
+
+def cache_nat_port_usage(sample, source_ips):
+    global _nat_port_metrics_cache
+    _nat_port_metrics_cache = dict(sample)
+    _nat_port_metrics_cache["source_ips"] = tuple(source_ips)
+
+
+def refresh_nat_port_usage(source_ips):
+    global _nat_port_scan_in_progress
+    try:
+        sample = scan_nat_port_usage(source_ips)
+        with _metrics_lock:
+            cache_nat_port_usage(sample, source_ips)
+    finally:
+        with _metrics_lock:
+            _nat_port_scan_in_progress = False
+
+
+def cached_nat_port_usage(source_ips, total_connections, now):
+    global _nat_port_scan_in_progress
+
+    source_ips = tuple(source_ips)
+    with _metrics_lock:
+        cached = (
+            dict(_nat_port_metrics_cache)
+            if _nat_port_metrics_cache
+            and _nat_port_metrics_cache.get("source_ips") == source_ips
+            else None
+        )
+        in_progress = _nat_port_scan_in_progress
+
+    cached_age = (
+        now - cached["sampled_at"]
+        if cached and cached.get("sampled_at")
+        else None
+    )
+    scan_due = cached is None or cached_age >= NAT_PORT_SCAN_INTERVAL_SECONDS
+
+    if scan_due and total_connections <= NAT_PORT_SYNC_SCAN_MAX_CONNECTIONS:
+        sample = scan_nat_port_usage(source_ips)
+        with _metrics_lock:
+            cache_nat_port_usage(sample, source_ips)
+        cached = dict(sample)
+        cached["source_ips"] = source_ips
+        cached_age = 0
+        scan_due = False
+
+    if scan_due and not in_progress:
+        with _metrics_lock:
+            if not _nat_port_scan_in_progress:
+                _nat_port_scan_in_progress = True
+                thread = threading.Thread(
+                    target=refresh_nat_port_usage,
+                    args=(source_ips,),
+                    daemon=True,
+                )
+                thread.start()
+                in_progress = True
+
+    if cached is None:
+        cached = zero_nat_port_usage(source_ips)
+    else:
+        cached.pop("source_ips", None)
+
+    cached["port_scan_in_progress"] = bool(in_progress)
+    cached["port_metrics_stale_seconds"] = (
+        round(max(0, now - cached["sampled_at"]), 3)
+        if cached.get("sampled_at")
+        else None
+    )
+    return cached
 
 
 def conntrack_metrics():
@@ -2179,22 +2387,6 @@ def conntrack_metrics():
 
     total_connections = read_first_int("/proc/sys/net/netfilter/nf_conntrack_count")
     max_connections = read_first_int("/proc/sys/net/netfilter/nf_conntrack_max")
-    protocol_counts = {}
-    ports_by_protocol = {"tcp": set(), "udp": set()}
-    lines = parse_conntrack_lines()
-
-    if lines:
-        total_connections = len(lines)
-        for line in lines:
-            fields = line.split()
-            protocol = fields[2].lower() if len(fields) > 2 else "unknown"
-            protocol_counts[protocol] = protocol_counts.get(protocol, 0) + 1
-            if protocol in ports_by_protocol:
-                for token in fields:
-                    if token.startswith("sport="):
-                        port = token.split("=", 1)[1]
-                        if port.isdigit():
-                            ports_by_protocol[protocol].add(port)
 
     now = time.time()
     connections_per_second = 0
@@ -2209,14 +2401,12 @@ def conntrack_metrics():
 
     port_capacity = read_port_capacity()
     pool = snat_pool_policy()
-    source_ip_count = len(pool["source_ips"]) if pool["enabled"] else 1
+    snat_source_ips = pool["source_ips"] if pool["enabled"] else []
+    source_ip_count = len(snat_source_ips) if pool["enabled"] else 1
     source_ip_count = max(1, source_ip_count)
-    ports_in_use_by_protocol = {
-        protocol: len(ports)
-        for protocol, ports in ports_by_protocol.items()
-    }
-    ports_in_use = len(set().union(*ports_by_protocol.values()))
-    total_available_ports = port_capacity["per_ip_total"] * source_ip_count
+    port_usage = cached_nat_port_usage(snat_source_ips, total_connections, now)
+    ports_in_use = port_usage["ports_in_use"]
+    total_available_ports = port_capacity["per_ip_total"]
     utilization = round((ports_in_use / total_available_ports) * 100, 2) if total_available_ports else 0
     connection_utilization = (
         round((total_connections / max_connections) * 100, 2)
@@ -2229,13 +2419,17 @@ def conntrack_metrics():
         "max_connections": max_connections,
         "connection_utilization_percent": connection_utilization,
         "connections_per_second": connections_per_second,
-        "protocol_counts": protocol_counts,
+        "protocol_counts": port_usage["protocol_counts"],
         "ports_in_use": ports_in_use,
-        "ports_in_use_by_protocol": ports_in_use_by_protocol,
+        "ports_in_use_by_protocol": port_usage["ports_in_use_by_protocol"],
+        "ports_in_use_by_source_ip": port_usage["ports_in_use_by_source_ip"],
         "snat_source_ip_count": source_ip_count,
         "total_available_ports": total_available_ports,
         "available_ports": max(0, total_available_ports - ports_in_use),
         "port_utilization_percent": utilization,
+        "port_scan_in_progress": port_usage["port_scan_in_progress"],
+        "port_metrics_stale_seconds": port_usage["port_metrics_stale_seconds"],
+        "conntrack_entries_scanned": port_usage["conntrack_entries_scanned"],
         "ephemeral_port_range": {
             "start": port_capacity["range_start"],
             "end": port_capacity["range_end"],
