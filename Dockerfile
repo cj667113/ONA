@@ -1,5 +1,8 @@
 FROM oraclelinux:9
-RUN dnf install -y iptables conntrack-tools iproute kmod oci-utils python3 python3-pip && \
+RUN dnf install -y iptables conntrack-tools iproute kmod python3 python3-pip && \
+    if dnf repoquery --enablerepo=ol9_oci_included oci-utils >/dev/null 2>&1; then \
+        dnf install -y --enablerepo=ol9_oci_included oci-utils; \
+    fi && \
     dnf clean all
 
 WORKDIR /ONA

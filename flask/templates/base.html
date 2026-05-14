@@ -212,6 +212,10 @@
       min-width: 0;
     }
 
+    .metric-tile-head > div:first-child {
+      min-width: 0;
+    }
+
     .metric-label {
       color: var(--ona-muted);
       font-size: 0.78rem;
@@ -233,7 +237,8 @@
       min-height: 1.2rem;
       text-align: right;
       max-width: 52%;
-      overflow-wrap: anywhere;
+      overflow-wrap: normal;
+      word-break: normal;
     }
 
     .chart-area {
@@ -502,11 +507,41 @@
     }
 
     .source-controls-grid {
-      display: grid;
-      grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr);
-      gap: 12px;
-      align-items: end;
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      flex-wrap: wrap;
       margin-bottom: 12px;
+    }
+
+    .snat-pool-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 0;
+      margin-bottom: 0;
+    }
+
+    .snat-pool-toggle .form-check-input {
+      margin-top: 0;
+    }
+
+    .source-capacity-summary {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .source-capacity-summary .metric-label,
+    .source-capacity-summary .metric-subtext {
+      white-space: nowrap;
+    }
+
+    .source-capacity-summary .metric-subtext {
+      max-width: none;
+      min-height: 0;
+      text-align: left;
     }
 
     .compact-empty {
@@ -546,9 +581,6 @@
         grid-template-columns: 1fr;
       }
 
-      .source-controls-grid {
-        grid-template-columns: 1fr 1fr;
-      }
     }
 
     @media (max-width: 640px) {
@@ -575,9 +607,22 @@
       }
 
       .metric-grid,
-      .chart-grid,
-      .source-controls-grid {
+      .chart-grid {
         grid-template-columns: 1fr;
+      }
+
+      .source-controls-grid,
+      .source-capacity-summary {
+        display: block;
+      }
+
+      .source-capacity-summary {
+        margin-top: 8px;
+      }
+
+      .source-capacity-summary .metric-label,
+      .source-capacity-summary .metric-subtext {
+        white-space: normal;
       }
 
       .metric-tile-head {
