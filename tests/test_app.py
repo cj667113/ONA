@@ -484,6 +484,25 @@ class NatPortCapacityTests(unittest.TestCase):
         self.assertEqual(capacity["per_ip_ports"], 55001)
         self.assertEqual(capacity["total_available_ports"], 110002)
 
+    def test_estimated_snat_capacity_caps_total_source_ports(self):
+        with mock.patch.object(
+            ona_app,
+            "snat_pool_policy",
+            return_value={
+                "enabled": True,
+                "source_ips": [f"10.0.0.{index}" for index in range(1, 25)],
+            },
+        ), mock.patch.object(
+            ona_app,
+            "read_port_capacity",
+            return_value={"per_ip_total": 64512},
+        ):
+            capacity = ona_app.estimated_snat_capacity()
+
+        self.assertEqual(capacity["source_ip_count"], 24)
+        self.assertEqual(capacity["per_ip_ports"], 64512)
+        self.assertEqual(capacity["total_available_ports"], 1500000)
+
     def test_conntrack_metrics_counts_unique_ports_once_across_protocols(self):
         previous_sample = ona_app._last_conntrack_sample
         previous_port_cache = ona_app._nat_port_metrics_cache

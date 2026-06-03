@@ -98,6 +98,7 @@ SNAT_POOL_TABLE_BASE = 30000
 SNAT_POOL_RULE_PRIORITY_BASE = 30000
 SNAT_POOL_MAX_SOURCES = 256
 MAX_SOURCE_PORTS_PER_IP = 65535
+NAT_PORT_EXHAUSTION_CAP = int(os.getenv("ONA_NAT_PORT_EXHAUSTION_CAP", "1500000"))
 SNAT_FORWARDING_SYSCTLS = {
     "/proc/sys/net/ipv4/ip_local_port_range": "1024 65535",
     "/proc/sys/net/ipv4/tcp_fin_timeout": "15",
@@ -2044,9 +2045,14 @@ def estimated_snat_capacity():
     pool = snat_pool_policy()
     source_count = len(pool["source_ips"]) if pool["enabled"] else 1
     port_capacity = read_port_capacity()
+    source_ip_count = max(1, source_count)
+    total_available_ports = min(
+        port_capacity["per_ip_total"] * source_ip_count,
+        NAT_PORT_EXHAUSTION_CAP,
+    )
     return {
-        "source_ip_count": max(1, source_count),
-        "total_available_ports": port_capacity["per_ip_total"] * max(1, source_count),
+        "source_ip_count": source_ip_count,
+        "total_available_ports": total_available_ports,
         "per_ip_ports": port_capacity["per_ip_total"],
     }
 
@@ -2406,7 +2412,10 @@ def conntrack_metrics():
     source_ip_count = max(1, source_ip_count)
     port_usage = cached_nat_port_usage(snat_source_ips, total_connections, now)
     ports_in_use = port_usage["ports_in_use"]
-    total_available_ports = port_capacity["per_ip_total"] * source_ip_count
+    total_available_ports = min(
+        port_capacity["per_ip_total"] * source_ip_count,
+        NAT_PORT_EXHAUSTION_CAP,
+    )
     utilization = round((ports_in_use / total_available_ports) * 100, 2) if total_available_ports else 0
     connection_utilization = (
         round((total_connections / max_connections) * 100, 2)
